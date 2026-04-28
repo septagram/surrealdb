@@ -14,6 +14,7 @@ use std::ops::Bound;
 use anyhow::Result;
 use async_trait::async_trait;
 use parking_lot::RwLock;
+pub use surrealism_types::kv::SwapResult;
 
 /// Maximum allowed key length in bytes. Prevents memory abuse through
 /// excessively long keys while allowing hierarchical paths like
@@ -45,6 +46,29 @@ pub trait KVStore: Send + Sync {
 		end: Bound<String>,
 	) -> Result<Vec<(String, surrealdb_types::Value)>>;
 	async fn count(&self, start: Bound<String>, end: Bound<String>) -> Result<u64>;
+
+	/// Atomically add `delta` to the i64 value at `key`, returning the
+	/// value as it was *before* the add. Mirrors
+	/// [`std::sync::atomic::AtomicI64::fetch_add`].
+	///
+	/// On absent key the prior value is treated as 0. Errors if the
+	/// existing value is not an integer or if the addition overflows.
+	async fn fetch_add(&self, key: String, delta: i64) -> Result<i64>;
+
+	/// Atomically compare the value at `key` against `expected`; if
+	/// they match, replace it with `new` (or delete it if `new` is
+	/// `None`). Returns [`SwapResult::Swapped`] on success or
+	/// [`SwapResult::Mismatched`] carrying the actual current value
+	/// (suitable as the next `expected` for a one-round-trip retry).
+	///
+	/// `expected = None` expresses set-if-absent;
+	/// `new = None` expresses delete-if-equals.
+	async fn compare_and_swap(
+		&self,
+		key: String,
+		expected: Option<surrealdb_types::Value>,
+		new: Option<surrealdb_types::Value>,
+	) -> Result<SwapResult>;
 }
 
 /// In-memory BTreeMap implementation of KVStore with optional size limits.
@@ -214,6 +238,61 @@ impl KVStore for BTreeMapStore {
 		let map = self.inner.read();
 		Ok(map.range((start, end)).count() as u64)
 	}
+
+	async fn fetch_add(&self, key: String, delta: i64) -> Result<i64> {
+		Self::check_key_length(&key)?;
+		let mut map = self.inner.write();
+		let was_present = map.contains_key(&key);
+		let prev = match map.get(&key) {
+			Some(surrealdb_types::Value::Number(surrealdb_types::Number::Int(n))) => *n,
+			Some(_) => anyhow::bail!("kv fetch_add: key {key:?} is not an integer"),
+			None => 0,
+		};
+		let next = prev
+			.checked_add(delta)
+			.ok_or_else(|| anyhow::anyhow!("kv fetch_add: overflow on key {key:?}"))?;
+		// No check_value_size: encoded i64 is bounded; the check would only ever fire
+		// at absurd max_value_bytes configurations that would also reject every existing
+		// integer in the store. Reintroduce if/when fetch_add_decimal is added.
+		if !was_present {
+			self.check_entry_count(&map, 1)?;
+		}
+		map.insert(key, surrealdb_types::Value::Number(surrealdb_types::Number::Int(next)));
+		Ok(prev)
+	}
+
+	async fn compare_and_swap(
+		&self,
+		key: String,
+		expected: Option<surrealdb_types::Value>,
+		new: Option<surrealdb_types::Value>,
+	) -> Result<SwapResult> {
+		Self::check_key_length(&key)?;
+		if let Some(ref v) = new {
+			self.check_value_size(v)?;
+		}
+		let mut map = self.inner.write();
+		let actual = map.get(&key).cloned();
+		if actual == expected {
+			match new {
+				Some(v) => {
+					// Inside actual == expected, so expected.is_none() implies the key is
+					// currently absent and we're inserting fresh. Avoids a redundant
+					// contains_key lookup.
+					if expected.is_none() {
+						self.check_entry_count(&map, 1)?;
+					}
+					map.insert(key, v);
+				}
+				None => {
+					map.remove(&key);
+				}
+			}
+			Ok(SwapResult::Swapped)
+		} else {
+			Ok(SwapResult::Mismatched(actual))
+		}
+	}
 }
 
 #[cfg(test)]
@@ -370,5 +449,192 @@ mod tests {
 
 		let err = store.set_batch(vec![(bad_key, int_val(3))]).await;
 		assert!(err.is_err());
+	}
+
+	// ── fetch_add ────────────────────────────────────────────────────
+
+	#[tokio::test]
+	async fn fetch_add_absent_key_starts_at_zero() {
+		let store = BTreeMapStore::new();
+		assert_eq!(store.fetch_add("c".into(), 1).await.unwrap(), 0);
+		assert_eq!(store.get("c".into()).await.unwrap(), Some(int_val(1)));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_returns_previous_value() {
+		let store = BTreeMapStore::new();
+		store.set("c".into(), int_val(10)).await.unwrap();
+		assert_eq!(store.fetch_add("c".into(), 5).await.unwrap(), 10);
+		assert_eq!(store.get("c".into()).await.unwrap(), Some(int_val(15)));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_negative_delta_decrements() {
+		let store = BTreeMapStore::new();
+		store.set("c".into(), int_val(10)).await.unwrap();
+		assert_eq!(store.fetch_add("c".into(), -3).await.unwrap(), 10);
+		assert_eq!(store.get("c".into()).await.unwrap(), Some(int_val(7)));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_overflow_errors() {
+		let store = BTreeMapStore::new();
+		store.set("c".into(), int_val(i64::MAX)).await.unwrap();
+		let err = store.fetch_add("c".into(), 1).await;
+		assert!(err.is_err());
+		assert!(err.unwrap_err().to_string().contains("overflow"));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_underflow_errors() {
+		let store = BTreeMapStore::new();
+		store.set("c".into(), int_val(i64::MIN)).await.unwrap();
+		let err = store.fetch_add("c".into(), -1).await;
+		assert!(err.is_err());
+		assert!(err.unwrap_err().to_string().contains("overflow"));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_non_integer_errors() {
+		let store = BTreeMapStore::new();
+		store.set("c".into(), str_val("hello")).await.unwrap();
+		let err = store.fetch_add("c".into(), 1).await;
+		assert!(err.is_err());
+		assert!(err.unwrap_err().to_string().contains("not an integer"));
+	}
+
+	#[tokio::test]
+	async fn fetch_add_concurrent_no_lost_updates() {
+		// N parallel fetch_add(key, 1) must produce final value N — the lost-update
+		// race that motivates this primitive's existence.
+		use std::sync::Arc;
+		let store = Arc::new(BTreeMapStore::new());
+		const N: i64 = 64;
+		let mut handles = Vec::with_capacity(N as usize);
+		for _ in 0..N {
+			let s = store.clone();
+			handles.push(tokio::spawn(async move {
+				s.fetch_add("c".into(), 1).await.unwrap();
+			}));
+		}
+		for h in handles {
+			h.await.unwrap();
+		}
+		assert_eq!(store.get("c".into()).await.unwrap(), Some(int_val(N)));
+	}
+
+	// ── compare_and_swap ─────────────────────────────────────────────
+
+	#[tokio::test]
+	async fn cas_swaps_on_match() {
+		let store = BTreeMapStore::new();
+		store.set("k".into(), int_val(1)).await.unwrap();
+		let r =
+			store.compare_and_swap("k".into(), Some(int_val(1)), Some(int_val(2))).await.unwrap();
+		assert_eq!(r, SwapResult::Swapped);
+		assert_eq!(store.get("k".into()).await.unwrap(), Some(int_val(2)));
+	}
+
+	#[tokio::test]
+	async fn cas_returns_actual_on_mismatch() {
+		let store = BTreeMapStore::new();
+		store.set("k".into(), int_val(1)).await.unwrap();
+		let r =
+			store.compare_and_swap("k".into(), Some(int_val(99)), Some(int_val(2))).await.unwrap();
+		assert_eq!(r, SwapResult::Mismatched(Some(int_val(1))));
+		// Value unchanged.
+		assert_eq!(store.get("k".into()).await.unwrap(), Some(int_val(1)));
+	}
+
+	#[tokio::test]
+	async fn cas_set_if_absent_succeeds_when_absent() {
+		let store = BTreeMapStore::new();
+		let r = store.compare_and_swap("k".into(), None, Some(int_val(7))).await.unwrap();
+		assert_eq!(r, SwapResult::Swapped);
+		assert_eq!(store.get("k".into()).await.unwrap(), Some(int_val(7)));
+	}
+
+	#[tokio::test]
+	async fn cas_set_if_absent_fails_when_present() {
+		let store = BTreeMapStore::new();
+		store.set("k".into(), int_val(1)).await.unwrap();
+		let r = store.compare_and_swap("k".into(), None, Some(int_val(7))).await.unwrap();
+		assert_eq!(r, SwapResult::Mismatched(Some(int_val(1))));
+	}
+
+	#[tokio::test]
+	async fn cas_delete_if_equals() {
+		let store = BTreeMapStore::new();
+		store.set("k".into(), int_val(1)).await.unwrap();
+		let r = store.compare_and_swap("k".into(), Some(int_val(1)), None).await.unwrap();
+		assert_eq!(r, SwapResult::Swapped);
+		assert!(store.get("k".into()).await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn cas_delete_if_equals_mismatch_keeps_value() {
+		let store = BTreeMapStore::new();
+		store.set("k".into(), int_val(1)).await.unwrap();
+		let r = store.compare_and_swap("k".into(), Some(int_val(99)), None).await.unwrap();
+		assert_eq!(r, SwapResult::Mismatched(Some(int_val(1))));
+		assert_eq!(store.get("k".into()).await.unwrap(), Some(int_val(1)));
+	}
+
+	#[tokio::test]
+	async fn cas_over_strings_works() {
+		// Design strength: arbitrary-Value CAS, not just fixed-width primitives.
+		let store = BTreeMapStore::new();
+		store.set("k".into(), str_val("hello")).await.unwrap();
+		let r = store
+			.compare_and_swap("k".into(), Some(str_val("hello")), Some(str_val("world")))
+			.await
+			.unwrap();
+		assert_eq!(r, SwapResult::Swapped);
+		assert_eq!(store.get("k".into()).await.unwrap(), Some(str_val("world")));
+	}
+
+	#[tokio::test]
+	async fn cas_respects_max_entries_on_set_if_absent() {
+		let store = BTreeMapStore::with_limits(Some(1), None);
+		store.set("a".into(), int_val(1)).await.unwrap();
+		let err = store.compare_and_swap("b".into(), None, Some(int_val(2))).await;
+		assert!(err.is_err());
+		assert!(err.unwrap_err().to_string().contains("exceed limit"));
+	}
+
+	#[tokio::test]
+	async fn cas_concurrent_loop_no_lost_updates() {
+		// Build an increment via CAS-loop using SwapResult::Mismatched(actual) for
+		// 1-round-trip retry. N concurrent loops must produce final value N.
+		use std::sync::Arc;
+		let store = Arc::new(BTreeMapStore::new());
+		const N: i64 = 32;
+		let mut handles = Vec::with_capacity(N as usize);
+		for _ in 0..N {
+			let s = store.clone();
+			handles.push(tokio::spawn(async move {
+				let mut expected: Option<Value> = s.get("c".into()).await.unwrap();
+				loop {
+					let cur = match &expected {
+						Some(Value::Number(surrealdb_types::Number::Int(n))) => *n,
+						None => 0,
+						_ => panic!("non-int found"),
+					};
+					let next = int_val(cur + 1);
+					match s
+						.compare_and_swap("c".into(), expected.clone(), Some(next))
+						.await
+						.unwrap()
+					{
+						SwapResult::Swapped => break,
+						SwapResult::Mismatched(actual) => expected = actual,
+					}
+				}
+			}));
+		}
+		for h in handles {
+			h.await.unwrap();
+		}
+		assert_eq!(store.get("c".into()).await.unwrap(), Some(int_val(N)));
 	}
 }

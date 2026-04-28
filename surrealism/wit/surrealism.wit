@@ -103,6 +103,37 @@ interface host {
 
     /// Count the number of entries within the given range.
     kv-count: func(range: serialized-value) -> result<u64, string>;
+
+    // ── Atomic primitives ────────────────────────────────────────────
+    //
+    // Compound atomic operations that close the read-then-write race
+    // window between separate `kv-get` and `kv-set` calls. The whole
+    // operation runs under the store's write lock — no other plugin
+    // invocation observes an intermediate state.
+
+    /// Atomically add `delta` to the current i64 value at `key`,
+    /// returning the value as it was *before* the add. Mirrors
+    /// `std::sync::atomic::AtomicI64::fetch_add`.
+    ///
+    /// On absent key the prior value is treated as 0. Errors if the
+    /// existing value is not an integer or if the addition overflows.
+    kv-fetch-add: func(key: string, delta: s64) -> result<s64, string>;
+
+    /// Atomically compare the value at `key` against `expected`; if
+    /// they match, replace it with `new` (or delete it if `new` is
+    /// `none`). The wire return is a `(swapped, actual)` tuple:
+    ///   • `(true, _)` — swap performed; the second field is unused.
+    ///   • `(false, actual)` — current value did not match; `actual`
+    ///     is the value as observed under the lock, suitable as the
+    ///     next `expected` to retry in one round-trip.
+    ///
+    /// `expected = none` means "swap only if absent" (set-if-absent).
+    /// `new = none` means "delete only if matched".
+    kv-compare-and-swap: func(
+        key: string,
+        expected: option<serialized-value>,
+        new: option<serialized-value>,
+    ) -> result<tuple<bool, option<serialized-value>>, string>;
 }
 
 /// The `plugin` world is the top-level contract that every surrealism guest

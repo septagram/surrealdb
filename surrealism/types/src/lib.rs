@@ -14,3 +14,6 @@ pub mod args;
 
 /// Error handling utilities for prefixing errors with context.
 pub mod err;
+
+/// Shared types for the per-module key-value store.
+pub mod kv;

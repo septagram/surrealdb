@@ -57,6 +57,7 @@ pub mod kv {
 
 	use anyhow::Result;
 	use surrealdb_types::SurrealValue;
+	pub use surrealism_types::kv::SwapResult;
 
 	use super::{host, host_err};
 
@@ -168,5 +169,51 @@ pub mod kv {
 	pub fn count<R: RangeBounds<String>>(range: R) -> Result<u64> {
 		let range_bytes = encode_range(range)?;
 		host::kv_count(&range_bytes).map_err(|e| host_err("kv::count", e))
+	}
+
+	/// Atomically add `delta` to the i64 value at `key`, returning the value
+	/// as it was *before* the add. Mirrors
+	/// [`std::sync::atomic::AtomicI64::fetch_add`].
+	///
+	/// On absent key the prior value is treated as 0. Errors if the existing
+	/// value is not an integer or if the addition overflows.
+	pub fn fetch_add<K: Into<String>>(key: K, delta: i64) -> Result<i64> {
+		host::kv_fetch_add(&key.into(), delta).map_err(|e| host_err("kv::fetch_add", e))
+	}
+
+	/// Atomically compare the value at `key` against `expected`; if they
+	/// match, replace it with `new` (or delete it if `new` is `None`).
+	///
+	/// Returns [`SwapResult::Swapped`] on success or
+	/// [`SwapResult::Mismatched`] carrying the actual current value — pass
+	/// it as the next `expected` to retry in a single round-trip.
+	///
+	/// `expected = None` expresses set-if-absent;
+	/// `new = None` expresses delete-if-equals.
+	pub fn compare_and_swap<K: Into<String>>(
+		key: K,
+		expected: Option<surrealdb_types::Value>,
+		new: Option<surrealdb_types::Value>,
+	) -> Result<SwapResult> {
+		let expected_bytes = match expected {
+			Some(v) => Some(surrealdb_types::encode(&v)?),
+			None => None,
+		};
+		let new_bytes = match new {
+			Some(v) => Some(surrealdb_types::encode(&v)?),
+			None => None,
+		};
+		let (swapped, actual_bytes) =
+			host::kv_compare_and_swap(&key.into(), expected_bytes.as_deref(), new_bytes.as_deref())
+				.map_err(|e| host_err("kv::compare_and_swap", e))?;
+		if swapped {
+			Ok(SwapResult::Swapped)
+		} else {
+			let actual = match actual_bytes {
+				Some(b) => Some(surrealdb_types::decode(&b)?),
+				None => None,
+			};
+			Ok(SwapResult::Mismatched(actual))
+		}
 	}
 }

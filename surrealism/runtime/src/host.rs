@@ -11,7 +11,7 @@ use surrealism_types::err::{PrefixErr, SurrealismResult};
 use wasmtime::StoreContextMut;
 
 use crate::config::SurrealismConfig;
-use crate::kv::KVStore;
+use crate::kv::{KVStore, SwapResult};
 use crate::store::StoreData;
 
 // ============================================================================
@@ -264,6 +264,41 @@ pub fn implement_host_functions(
 			let (start, end) = decode_range_bounds(&range_bytes)?;
 			let kv = store.data_mut().context.kv().map_err(stringify)?;
 			kv.count(start, end).await.map_err(stringify)
+		}
+	);
+
+	register_host_fn!(host, "kv-fetch-add",
+		|store, (key: String, delta: i64)| -> Result<i64> {
+			let kv = store.data_mut().context.kv().map_err(stringify)?;
+			kv.fetch_add(key, delta).await.map_err(stringify)
+		}
+	);
+
+	register_host_fn!(host, "kv-compare-and-swap",
+		|store, (
+			key: String,
+			expected_bytes: Option<Vec<u8>>,
+			new_bytes: Option<Vec<u8>>,
+		)| -> Result<(bool, Option<Vec<u8>>)> {
+			let expected = match expected_bytes {
+				Some(b) => Some(surrealdb_types::decode(&b).map_err(stringify)?),
+				None => None,
+			};
+			let new = match new_bytes {
+				Some(b) => Some(surrealdb_types::decode(&b).map_err(stringify)?),
+				None => None,
+			};
+			let kv = store.data_mut().context.kv().map_err(stringify)?;
+			match kv.compare_and_swap(key, expected, new).await.map_err(stringify)? {
+				SwapResult::Swapped => Ok((true, None)),
+				SwapResult::Mismatched(actual) => {
+					let actual_bytes = match actual {
+						Some(v) => Some(surrealdb_types::encode(&v).map_err(stringify)?),
+						None => None,
+					};
+					Ok((false, actual_bytes))
+				}
+			}
 		}
 	);
 
