@@ -599,6 +599,21 @@ impl Transaction {
 		Ok(self.tr.scanr(beg..end, limit, skip, version).await.map_err(Error::from)?)
 	}
 
+	/// Reverse scan a raw byte range, returning just the keys. Thin wrapper
+	/// over [`crate::kvs::tr::Transactor::scanr`] used by the Dorsid Sid
+	/// warm-up path, which needs to iterate record keys with bounds built
+	/// from [`crate::key::record::prefix`] / [`crate::key::record::suffix`]
+	/// rather than from a `KVKey`-typed range.
+	#[instrument(level = "trace", target = "surrealdb::core::kvs::tx", skip_all)]
+	pub async fn scan_raw_keys_reverse(
+		&self,
+		rng: Range<Vec<u8>>,
+		limit: u32,
+	) -> Result<Vec<crate::kvs::Key>> {
+		let rows = self.tr.scanr(rng, limit.into(), 0, None).await.map_err(Error::from)?;
+		Ok(rows.into_iter().map(|(k, _v)| k).collect())
+	}
+
 	/// Count the total number of keys within a range in the datastore.
 	///
 	/// This function fetches the total count, in batches, with multiple

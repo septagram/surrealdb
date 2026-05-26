@@ -25,7 +25,7 @@ impl Document {
 	///
 	/// The method ensures that all expressions are properly evaluated before
 	/// being used as record IDs.
-	pub(super) fn generate_record_id(&mut self, ctx: &FrozenContext) -> Result<()> {
+	pub(super) async fn generate_record_id(&mut self, ctx: &FrozenContext) -> Result<()> {
 		// Check if we need to generate a record id
 		if let Some(tb) = &self.r#gen {
 			// This is a CREATE, UPSERT, UPDATE, RELATE statement
@@ -39,13 +39,13 @@ impl Document {
 				match &self.input_data {
 					// There is a data clause so fetch a record id
 					Some(data) => match data.rid() {
-						Value::None => self.generate_default_id(ctx, tb.clone())?,
+						Value::None => self.generate_default_id(ctx, tb.clone()).await?,
 						// Generate a new id from the id field
 						id => id.generate(tb.clone(), false)?,
 						// Generate a new random table id
 					},
 					// There is no data clause so create a record id
-					None => self.generate_default_id(ctx, tb.clone())?,
+					None => self.generate_default_id(ctx, tb.clone()).await?,
 				}
 			};
 
@@ -67,8 +67,8 @@ impl Document {
 	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
 	/// Dorsid `Sid` and `Rid` IDs; the `Default` arm preserves upstream
 	/// random-string behaviour.
-	fn generate_default_id(&self, ctx: &FrozenContext, tb: TableName) -> Result<RecordId> {
-		let tb_def = self.doc_ctx.tb()?;
+	async fn generate_default_id(&self, ctx: &FrozenContext, tb: TableName) -> Result<RecordId> {
+		let tb_def = Arc::clone(self.doc_ctx.tb()?);
 		match tb_def.id_generation {
 			IdGeneration::Default => Ok(RecordId::random_for_table(tb)),
 			IdGeneration::Rid => {
@@ -82,11 +82,8 @@ impl Document {
 						"Sid generation requires a SidRegistry on the context; this is a bug"
 					)
 				})?;
-				let sid = registry.next_sid(
-					tb_def.namespace_id,
-					tb_def.database_id,
-					tb_def.table_id,
-				)?;
+				let txn = ctx.tx();
+				let sid = registry.next_sid_warmed(&txn, &tb_def).await?;
 				Ok(RecordId::new(tb, sid.to_bits()))
 			}
 		}
@@ -493,6 +490,42 @@ mod tests {
 			assert!(*id_n >= 0);
 			last = *id_n;
 		}
+	}
+
+	#[tokio::test]
+	async fn sid_warmup_lifts_floor_above_stored_max() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute("DEFINE TABLE foo ID SID;", &sess, None).await.unwrap();
+
+		// Mint a real Sid at "now" to get a plant value the generator
+		// will accept as a floor (i.e. timestamp not in the far future).
+		// Then plant a slightly-larger derived value so warmup must lift
+		// past it on the next mint. Adding 1024 (one full seq window)
+		// guarantees the planted id sits strictly above the timestamp the
+		// generator just saw.
+		let baseline_sid = dorsid::sid::Generator::new(0).unwrap().next().unwrap();
+		let planted_id: i64 = baseline_sid.to_bits() + 1024;
+		ds.execute(&format!("CREATE foo:{planted_id};"), &sess, None).await.unwrap();
+
+		// First mint after the planted row must scan, find the floor, and
+		// emit a Sid strictly greater than the planted id.
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let RecordIdKey::Number(minted) = created_record_key(res[0].result.as_ref().unwrap())
+		else {
+			panic!("expected Number id post-warmup");
+		};
+		assert!(
+			*minted > planted_id,
+			"warmup should lift the floor above {planted_id}, got {minted}",
+		);
+
+		// A subsequent mint also stays above the planted id.
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let RecordIdKey::Number(minted_2) = created_record_key(res[0].result.as_ref().unwrap())
+		else {
+			panic!("expected Number id on second mint");
+		};
+		assert!(*minted_2 > *minted, "second Sid must exceed first ({minted_2} > {minted})");
 	}
 
 	#[tokio::test]
