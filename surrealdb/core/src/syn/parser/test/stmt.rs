@@ -1608,6 +1608,60 @@ fn parse_define_table() {
 }
 
 #[test]
+fn parse_define_table_id_generation() {
+	use crate::sql::IdGeneration;
+
+	let cases = [
+		("DEFINE TABLE foo ID DEFAULT", IdGeneration::Default),
+		("DEFINE TABLE foo ID SID", IdGeneration::Sid),
+		("DEFINE TABLE foo ID RID", IdGeneration::Rid),
+		("DEFINE TABLE foo id sid", IdGeneration::Sid),
+	];
+	for (query, expected) in cases {
+		let res = syn::parse_with(query.as_bytes(), async |parser, stk| {
+			parser.parse_expr_inherit(stk).await
+		})
+		.unwrap_or_else(|e| panic!("parse failed for {query}: {e}"));
+		let Expr::Define(boxed) = res else {
+			panic!("expected DEFINE for {query}");
+		};
+		let DefineStatement::Table(stmt) = *boxed else {
+			panic!("expected DEFINE TABLE for {query}");
+		};
+		assert_eq!(stmt.id_generation, expected, "for query: {query}");
+	}
+}
+
+#[test]
+fn define_table_id_generation_ddl_roundtrip() {
+	use surrealdb_types::ToSql;
+
+	use crate::sql::IdGeneration;
+
+	// Sid and Rid round-trip through DDL emission and reparse. Default emits
+	// no clause (preserves upstream behavior).
+	for kind in [IdGeneration::Default, IdGeneration::Sid, IdGeneration::Rid] {
+		let original = DefineTableStatement {
+			name: Expr::Table("t".to_string()),
+			id_generation: kind,
+			..Default::default()
+		};
+		let ddl = original.to_sql();
+		let parsed = syn::parse_with(ddl.as_bytes(), async |parser, stk| {
+			parser.parse_expr_inherit(stk).await
+		})
+		.unwrap_or_else(|e| panic!("reparse failed for {kind:?}: ddl={ddl:?} err={e}"));
+		let Expr::Define(boxed) = parsed else {
+			panic!("expected DEFINE for {kind:?}");
+		};
+		let DefineStatement::Table(stmt) = *boxed else {
+			panic!("expected DEFINE TABLE for {kind:?}");
+		};
+		assert_eq!(stmt.id_generation, kind, "round-trip for {kind:?} via ddl={ddl:?}");
+	}
+}
+
+#[test]
 fn parse_define_event() {
 	let res = syn::parse_with(
 		r#"DEFINE EVENT event ON TABLE table WHEN null THEN null,none ASYNC RETRY 5 MAXDEPTH 64"#

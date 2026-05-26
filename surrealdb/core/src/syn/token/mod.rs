@@ -404,7 +404,9 @@ impl fmt::Display for TokenKind {
 }
 
 /// An assertion statically checking the size of TokenKind.
-const _TOKEN_KIND_SIZE_ASSERT: [(); 2] = [(); std::mem::size_of::<TokenKind>()];
+/// Grew from 2 to 4 bytes when Keyword was bumped to #[repr(u16)] in the
+/// fork (the >256 keyword cap was hit; see plans/okay-let-s-do-the-replicated-shell.md).
+const _TOKEN_KIND_SIZE_ASSERT: [(); 4] = [(); std::mem::size_of::<TokenKind>()];
 
 impl TokenKind {
 	pub fn has_data(&self) -> bool {

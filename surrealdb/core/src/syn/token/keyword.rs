@@ -1,7 +1,7 @@
 macro_rules! keyword {
 	($($name:ident => $value:tt),* $(,)?) => {
 
-		#[repr(u8)]
+		#[repr(u16)]
 		#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 		pub enum Keyword{
 			$($name,)*
@@ -108,6 +108,7 @@ keyword! {
 	Headers => "HEADERS",
 	Highlights => "HIGHLIGHTS",
 	Hnsw => "HNSW",
+	Id => "ID",
 	Ignore => "IGNORE",
 	Include => "INCLUDE",
 	Index => "INDEX",
@@ -170,6 +171,7 @@ keyword! {
 	Relate => "RELATE",
 	Relation => "RELATION",
 	Remove => "REMOVE",
+	Rid => "RID",
 	Replace => "REPLACE",
 	Retry => "RETRY",
 	Return => "RETURN",
@@ -182,6 +184,7 @@ keyword! {
 	Scope => "SCOPE",
 	Select => "SELECT",
 	Sequence => "SEQUENCE",
+	Sid => "SID",
 	Session => "SESSION",
 	Set => "SET",
 	Show => "SHOW",

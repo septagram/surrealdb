@@ -21,8 +21,8 @@ use crate::sql::statements::define::{
 };
 use crate::sql::tokenizer::Tokenizer;
 use crate::sql::{
-	AccessType, DefineModuleStatement, Expr, Index, Kind, Literal, Param, Permission, Permissions,
-	Scoring, TableType, access_type, table_type,
+	AccessType, DefineModuleStatement, Expr, IdGeneration, Index, Kind, Literal, Param, Permission,
+	Permissions, Scoring, TableType, access_type, table_type,
 };
 #[cfg(feature = "surrealism")]
 use crate::sql::{ModuleExecutable, SiloExecutable, SurrealismExecutable};
@@ -692,6 +692,25 @@ impl Parser<'_> {
 				t!("CHANGEFEED") => {
 					self.pop_peek();
 					res.changefeed = Some(self.parse_changefeed()?);
+				}
+				t!("ID") => {
+					self.pop_peek();
+					let peek = self.peek();
+					match peek.kind {
+						t!("DEFAULT") => {
+							self.pop_peek();
+							res.id_generation = IdGeneration::Default;
+						}
+						t!("SID") => {
+							self.pop_peek();
+							res.id_generation = IdGeneration::Sid;
+						}
+						t!("RID") => {
+							self.pop_peek();
+							res.id_generation = IdGeneration::Rid;
+						}
+						_ => unexpected!(self, peek, "`DEFAULT`, `SID`, or `RID`"),
+					}
 				}
 				t!("AS") => {
 					self.pop_peek();
