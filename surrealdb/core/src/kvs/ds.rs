@@ -1847,6 +1847,7 @@ impl Datastore {
 		&self.sequences
 	}
 
+	#[expect(dead_code, reason = "accessor for completeness; mints route via Context")]
 	pub(crate) fn sid_registry(&self) -> &Arc<SidRegistry> {
 		&self.sid_registry
 	}

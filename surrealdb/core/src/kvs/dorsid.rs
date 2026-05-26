@@ -74,6 +74,9 @@ impl SidRegistry {
 	}
 
 	/// Realm id that every generator on this registry is initialised with.
+	/// Kept as a public accessor for diagnostics and future ALTER TABLE
+	/// support that may want to inspect the writer's realm.
+	#[expect(dead_code, reason = "diagnostic accessor; not yet consumed in-tree")]
 	pub fn realm_id(&self) -> u16 {
 		self.realm_id
 	}

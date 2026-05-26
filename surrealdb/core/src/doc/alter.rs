@@ -539,4 +539,74 @@ mod tests {
 			"explicit id should be preserved, got: {key:?}",
 		);
 	}
+
+	#[tokio::test]
+	async fn all_three_id_modes_coexist_in_one_db() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute(
+			"DEFINE TABLE t_default;\
+			 DEFINE TABLE t_sid ID SID;\
+			 DEFINE TABLE t_rid ID RID;",
+			&sess,
+			None,
+		)
+		.await
+		.unwrap();
+
+		let res = ds
+			.execute(
+				"CREATE t_default; CREATE t_sid; CREATE t_rid;",
+				&sess,
+				None,
+			)
+			.await
+			.unwrap();
+		assert!(matches!(created_record_key(res[0].result.as_ref().unwrap()), RecordIdKey::String(_)));
+		let RecordIdKey::Number(sid) = created_record_key(res[1].result.as_ref().unwrap()) else {
+			panic!("t_sid record did not produce a Number id");
+		};
+		let RecordIdKey::Number(rid) = created_record_key(res[2].result.as_ref().unwrap()) else {
+			panic!("t_rid record did not produce a Number id");
+		};
+		assert!(*sid >= 0 && *rid >= 0, "both persistent forms should have sign bit 0");
+	}
+
+	#[tokio::test]
+	async fn info_for_db_reports_id_generation_per_table() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute(
+			"DEFINE TABLE t_default;\
+			 DEFINE TABLE t_sid ID SID;\
+			 DEFINE TABLE t_rid ID RID;",
+			&sess,
+			None,
+		)
+		.await
+		.unwrap();
+
+		let res = ds.execute("INFO FOR DB STRUCTURE;", &sess, None).await.unwrap();
+		let Value::Object(info) = res[0].result.as_ref().unwrap() else {
+			panic!("INFO FOR DB STRUCTURE should return an object");
+		};
+		let tables = info.get("tables").expect("info must have tables");
+		let Value::Array(table_arr) = tables else {
+			panic!("tables should be an array, got: {tables:?}");
+		};
+
+		fn id_gen_for<'a>(arr: &'a [Value], name: &str) -> &'a Value {
+			for t in arr {
+				let Value::Object(obj) = t else { continue };
+				if matches!(obj.get("name"), Some(Value::String(n)) if n == name) {
+					return obj.get("id_generation").unwrap_or_else(|| {
+						panic!("table {name} structure is missing id_generation: {obj:?}")
+					});
+				}
+			}
+			panic!("table {name} not found in INFO output: {arr:?}");
+		}
+
+		assert_eq!(id_gen_for(table_arr, "t_default"), &Value::String("DEFAULT".into()));
+		assert_eq!(id_gen_for(table_arr, "t_sid"), &Value::String("SID".into()));
+		assert_eq!(id_gen_for(table_arr, "t_rid"), &Value::String("RID".into()));
+	}
 }
