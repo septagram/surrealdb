@@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
 use reblessive::tree::Stk;
 use surrealdb_types::ToSql;
 
-use crate::catalog::RecordType;
+use crate::catalog::{IdGeneration, RecordType};
 use crate::ctx::{Context, FrozenContext};
 use crate::dbs::{Options, Statement, Workable};
 use crate::doc::Document;
@@ -13,7 +13,7 @@ use crate::err::Error;
 use crate::expr::data::Data;
 use crate::expr::paths::{ID, IN, OUT};
 use crate::expr::{AssignOperator, FlowResultExt, Idiom};
-use crate::val::{RecordId, Value};
+use crate::val::{RecordId, TableName, Value};
 
 impl Document {
 	/// Generate a record ID for CREATE, UPSERT, and UPDATE statements
@@ -39,13 +39,13 @@ impl Document {
 				match &self.input_data {
 					// There is a data clause so fetch a record id
 					Some(data) => match data.rid() {
-						Value::None => RecordId::random_for_table(tb.clone()),
+						Value::None => self.generate_default_id(tb.clone())?,
 						// Generate a new id from the id field
 						id => id.generate(tb.clone(), false)?,
 						// Generate a new random table id
 					},
 					// There is no data clause so create a record id
-					None => RecordId::random_for_table(tb.clone()),
+					None => self.generate_default_id(tb.clone())?,
 				}
 			};
 
@@ -61,6 +61,23 @@ impl Document {
 		}
 		//
 		Ok(())
+	}
+
+	/// Mint a default record id for the given table based on its
+	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
+	/// Dorsid `Sid` and `Rid` IDs; the `Default` arm preserves upstream
+	/// random-string behaviour.
+	fn generate_default_id(&self, tb: TableName) -> Result<RecordId> {
+		let id_gen = self.doc_ctx.tb()?.id_generation;
+		match id_gen {
+			IdGeneration::Default => Ok(RecordId::random_for_table(tb)),
+			IdGeneration::Rid => {
+				let rid = dorsid::rid::next_persistent(None)
+					.map_err(|e| anyhow::anyhow!("dorsid Rid generation failed: {e}"))?;
+				Ok(RecordId::new(tb, rid.to_bits()))
+			}
+			IdGeneration::Sid => todo!("Sid generation lands in Step 5"),
+		}
 	}
 	/// Clears all of the content of this document.
 	/// This is used to empty the current content
@@ -371,4 +388,84 @@ async fn apply_assignments(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use surrealdb_types::{RecordIdKey, Value};
+
+	use crate::dbs::Session;
+	use crate::kvs::Datastore;
+
+	async fn fresh_ds() -> (Datastore, Session) {
+		let ds = Datastore::new("memory").await.unwrap();
+		let sess = Session::owner().with_ns("ns").with_db("db");
+		// Bootstrap ns + db so subsequent DEFINE TABLE etc. resolve.
+		ds.execute("DEFINE NAMESPACE ns; DEFINE DATABASE db;", &sess, None).await.unwrap();
+		(ds, sess)
+	}
+
+	/// Extract the single record id from a `CREATE foo;` response, asserting
+	/// the response shape along the way.
+	fn created_record_key(result: &Value) -> &RecordIdKey {
+		let Value::Array(arr) = result else {
+			panic!("expected array result, got: {result:?}");
+		};
+		assert_eq!(arr.len(), 1, "expected single created record");
+		let Value::Object(obj) = &arr[0] else {
+			panic!("expected object record, got: {:?}", arr[0]);
+		};
+		let id = obj.get("id").unwrap_or_else(|| panic!("no id field in {obj:?}"));
+		let Value::RecordId(rid) = id else {
+			panic!("expected RecordId, got: {id:?}");
+		};
+		&rid.key
+	}
+
+	#[tokio::test]
+	async fn create_on_id_rid_table_yields_positive_i64() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute("DEFINE TABLE foo ID RID;", &sess, None).await.unwrap();
+
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let result_1 = res[0].result.as_ref().unwrap();
+		let RecordIdKey::Number(id_1) = created_record_key(result_1) else {
+			panic!("expected Number id for ID RID table, got: {:?}", created_record_key(result_1));
+		};
+		assert!(*id_1 >= 0, "persistent Rid must have sign bit 0, got {id_1}");
+
+		// A second CREATE produces a different id (collision odds at 2 draws
+		// into a 63-bit space are vanishingly small).
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let result_2 = res[0].result.as_ref().unwrap();
+		let RecordIdKey::Number(id_2) = created_record_key(result_2) else {
+			panic!("expected Number id on second draw");
+		};
+		assert_ne!(*id_1, *id_2, "two Rid draws should not collide");
+		assert!(*id_2 >= 0);
+	}
+
+	#[tokio::test]
+	async fn create_on_default_table_yields_string_id() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute("DEFINE TABLE foo;", &sess, None).await.unwrap();
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let key = created_record_key(res[0].result.as_ref().unwrap());
+		assert!(
+			matches!(key, RecordIdKey::String(_)),
+			"default id_generation should produce a string id, got: {key:?}",
+		);
+	}
+
+	#[tokio::test]
+	async fn explicit_id_wins_over_rid_policy() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute("DEFINE TABLE foo ID RID;", &sess, None).await.unwrap();
+		let res = ds.execute("CREATE foo:hello;", &sess, None).await.unwrap();
+		let key = created_record_key(res[0].result.as_ref().unwrap());
+		assert!(
+			matches!(key, RecordIdKey::String(s) if s == "hello"),
+			"explicit id should be preserved, got: {key:?}",
+		);
+	}
 }

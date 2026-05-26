@@ -64,6 +64,14 @@ surrealism-runtime = { version = "0.2", path = "surrealism/runtime" }
 surrealism-types = { version = "0.2", path = "surrealism/types", default-features = false }
 # External surreal crates
 affinitypool = "0.4.0"
+# Dorsid: Sid/Rid first-class record IDs (sibling fork crate).
+# See plans/okay-let-s-do-the-replicated-shell.md.
+dorsid = { path = "../diceware-ordinal/dorsid", default-features = false, features = [
+    "time",
+    "sid", "sid-persistent",
+    "rid", "rid-persistent",
+    "csprng-getrandom",
+] }
 dmp = "0.2.3"
 indxdb = "0.12.0"
 lexicmp = "0.2.0"
