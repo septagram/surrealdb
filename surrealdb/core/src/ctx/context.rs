@@ -45,6 +45,7 @@ use crate::idx::trees::store::IndexStores;
 use crate::kvs::Transaction;
 use crate::kvs::cache::ds::DatastoreCache;
 use crate::kvs::index::IndexBuilder;
+use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::sequences::Sequences;
 use crate::kvs::slowlog::SlowLog;
 use crate::mem::ALLOC;
@@ -87,6 +88,8 @@ pub struct Context {
 	index_builder: Option<IndexBuilder>,
 	// The sequences
 	sequences: Option<Sequences>,
+	// The Dorsid Sid generator registry (one per Datastore).
+	sid_registry: Option<Arc<SidRegistry>>,
 	// Capabilities
 	capabilities: Arc<Capabilities>,
 	#[cfg(storage)]
@@ -145,6 +148,7 @@ impl Context {
 			cache: None,
 			index_builder: None,
 			sequences: None,
+			sid_registry: None,
 			#[cfg(storage)]
 			temporary_directory: None,
 			transaction: None,
@@ -194,6 +198,7 @@ impl Context {
 			cache: parent.cache.clone(),
 			index_builder: parent.index_builder.clone(),
 			sequences: parent.sequences.clone(),
+			sid_registry: parent.sid_registry.clone(),
 			#[cfg(storage)]
 			temporary_directory: parent.temporary_directory.clone(),
 			transaction: parent.transaction.clone(),
@@ -230,6 +235,7 @@ impl Context {
 			cache: parent.cache.clone(),
 			index_builder: parent.index_builder.clone(),
 			sequences: parent.sequences.clone(),
+			sid_registry: parent.sid_registry.clone(),
 			#[cfg(storage)]
 			temporary_directory: parent.temporary_directory.clone(),
 			transaction: parent.transaction.clone(),
@@ -273,6 +279,7 @@ impl Context {
 			cache: from.cache.clone(),
 			index_builder: from.index_builder.clone(),
 			sequences: from.sequences.clone(),
+			sid_registry: from.sid_registry.clone(),
 			#[cfg(storage)]
 			temporary_directory: from.temporary_directory.clone(),
 			transaction: from.transaction.clone(),
@@ -309,6 +316,7 @@ impl Context {
 			cache: from.cache.clone(),
 			index_builder: from.index_builder.clone(),
 			sequences: from.sequences.clone(),
+			sid_registry: from.sid_registry.clone(),
 			#[cfg(storage)]
 			temporary_directory: from.temporary_directory.clone(),
 			transaction: None,
@@ -336,6 +344,7 @@ impl Context {
 		index_stores: IndexStores,
 		index_builder: IndexBuilder,
 		sequences: Sequences,
+		sid_registry: Arc<SidRegistry>,
 		cache: Arc<DatastoreCache>,
 		#[cfg(feature = "http")] http_client: Arc<HttpClient>,
 		#[cfg(storage)] temporary_directory: Option<Arc<PathBuf>>,
@@ -358,6 +367,7 @@ impl Context {
 			cache: Some(cache),
 			index_builder: Some(index_builder),
 			sequences: Some(sequences),
+			sid_registry: Some(sid_registry),
 			#[cfg(storage)]
 			temporary_directory,
 			transaction: None,
@@ -397,6 +407,7 @@ impl Context {
 			cache: None,
 			index_builder: None,
 			sequences: None,
+			sid_registry: None,
 			#[cfg(storage)]
 			temporary_directory: None,
 			transaction: None,
@@ -635,6 +646,11 @@ impl Context {
 	/// Return the sequences manager
 	pub(crate) fn get_sequences(&self) -> Option<&Sequences> {
 		self.sequences.as_ref()
+	}
+
+	/// Return the Dorsid Sid generator registry.
+	pub(crate) fn get_sid_registry(&self) -> Option<&Arc<SidRegistry>> {
+		self.sid_registry.as_ref()
 	}
 
 	pub(crate) fn try_get_sequences(&self) -> Result<&Sequences> {

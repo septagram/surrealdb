@@ -461,6 +461,13 @@ unwrap_used = "warn"
 used_underscore_binding = "warn"
 
 # Profiles
+[profile.dev]
+# Full debuginfo+codegen pushes rustc-LLVM over the memory cliff on Windows
+# nightly when the test binary links all of surrealdb-core + dorsid. Trim
+# debuginfo to line tables to keep test builds under the limit. Adjust to
+# `debug = 2` for richer debugger sessions when needed.
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = true

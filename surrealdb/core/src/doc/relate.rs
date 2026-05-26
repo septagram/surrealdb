@@ -17,7 +17,7 @@ impl Document {
 		// Process the record data
 		self.process_record_data(stk, ctx, opt, stm).await?;
 		// Generate a record id
-		self.generate_record_id()?;
+		self.generate_record_id(ctx)?;
 		// Set default field values
 		self.default_record_data(ctx, opt, stm).await?;
 		// Check if table has correct relation status

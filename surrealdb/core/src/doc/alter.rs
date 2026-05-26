@@ -25,7 +25,7 @@ impl Document {
 	///
 	/// The method ensures that all expressions are properly evaluated before
 	/// being used as record IDs.
-	pub(super) fn generate_record_id(&mut self) -> Result<()> {
+	pub(super) fn generate_record_id(&mut self, ctx: &FrozenContext) -> Result<()> {
 		// Check if we need to generate a record id
 		if let Some(tb) = &self.r#gen {
 			// This is a CREATE, UPSERT, UPDATE, RELATE statement
@@ -39,13 +39,13 @@ impl Document {
 				match &self.input_data {
 					// There is a data clause so fetch a record id
 					Some(data) => match data.rid() {
-						Value::None => self.generate_default_id(tb.clone())?,
+						Value::None => self.generate_default_id(ctx, tb.clone())?,
 						// Generate a new id from the id field
 						id => id.generate(tb.clone(), false)?,
 						// Generate a new random table id
 					},
 					// There is no data clause so create a record id
-					None => self.generate_default_id(tb.clone())?,
+					None => self.generate_default_id(ctx, tb.clone())?,
 				}
 			};
 
@@ -67,16 +67,28 @@ impl Document {
 	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
 	/// Dorsid `Sid` and `Rid` IDs; the `Default` arm preserves upstream
 	/// random-string behaviour.
-	fn generate_default_id(&self, tb: TableName) -> Result<RecordId> {
-		let id_gen = self.doc_ctx.tb()?.id_generation;
-		match id_gen {
+	fn generate_default_id(&self, ctx: &FrozenContext, tb: TableName) -> Result<RecordId> {
+		let tb_def = self.doc_ctx.tb()?;
+		match tb_def.id_generation {
 			IdGeneration::Default => Ok(RecordId::random_for_table(tb)),
 			IdGeneration::Rid => {
 				let rid = dorsid::rid::next_persistent(None)
 					.map_err(|e| anyhow::anyhow!("dorsid Rid generation failed: {e}"))?;
 				Ok(RecordId::new(tb, rid.to_bits()))
 			}
-			IdGeneration::Sid => todo!("Sid generation lands in Step 5"),
+			IdGeneration::Sid => {
+				let registry = ctx.get_sid_registry().ok_or_else(|| {
+					anyhow::anyhow!(
+						"Sid generation requires a SidRegistry on the context; this is a bug"
+					)
+				})?;
+				let sid = registry.next_sid(
+					tb_def.namespace_id,
+					tb_def.database_id,
+					tb_def.table_id,
+				)?;
+				Ok(RecordId::new(tb, sid.to_bits()))
+			}
 		}
 	}
 	/// Clears all of the content of this document.
@@ -455,6 +467,32 @@ mod tests {
 			matches!(key, RecordIdKey::String(_)),
 			"default id_generation should produce a string id, got: {key:?}",
 		);
+	}
+
+	#[tokio::test]
+	async fn create_on_id_sid_table_yields_monotonic_positive_i64() {
+		let (ds, sess) = fresh_ds().await;
+		ds.execute("DEFINE TABLE foo ID SID;", &sess, None).await.unwrap();
+
+		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+		let RecordIdKey::Number(id_1) = created_record_key(res[0].result.as_ref().unwrap()) else {
+			panic!("expected Number id for ID SID table");
+		};
+		assert!(*id_1 >= 0, "persistent Sid must have sign bit 0, got {id_1}");
+
+		// Burst of CREATEs within the same millisecond should each get a
+		// distinct, strictly-increasing Sid (the per-ms sequence counter).
+		let mut last = *id_1;
+		for _ in 0..10 {
+			let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
+			let RecordIdKey::Number(id_n) = created_record_key(res[0].result.as_ref().unwrap())
+			else {
+				panic!("expected Number id");
+			};
+			assert!(*id_n > last, "Sids must be strictly increasing: {id_n} <= {last}");
+			assert!(*id_n >= 0);
+			last = *id_n;
+		}
 	}
 
 	#[tokio::test]

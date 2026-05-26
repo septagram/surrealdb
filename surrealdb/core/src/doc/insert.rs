@@ -28,7 +28,7 @@ impl Document {
 			return self.insert_update(stk, ctx, opt, &Statement::Insert(stm)).await;
 		}
 		// Try to generate a record id if none is present
-		self.generate_record_id()?;
+		self.generate_record_id(ctx)?;
 		// is this retryable?
 		// it is retryable when some data is present on the insert statement to update.
 		let retryable = stm.update.is_some();
@@ -141,7 +141,7 @@ impl Document {
 		self.modify_for_update_retry(retry, val);
 
 		// we restarted, so we might need to generate a record id again?
-		self.generate_record_id()?;
+		self.generate_record_id(ctx)?;
 
 		self.insert_update(stk, ctx, opt, &Statement::Insert(stm)).await
 	}

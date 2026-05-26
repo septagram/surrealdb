@@ -78,6 +78,7 @@ use crate::kvs::ds::requirements::{
 	TransactionBuilderFactoryRequirements, TransactionBuilderRequirements,
 };
 use crate::kvs::index::IndexBuilder;
+use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::sequences::Sequences;
 use crate::kvs::slowlog::SlowLog;
 use crate::kvs::tasklease::{LeaseHandler, TaskLeaseType};
@@ -133,6 +134,9 @@ pub struct Datastore {
 	buckets: BucketsManager,
 	// The sequences
 	sequences: Sequences,
+	// In-process Dorsid Sid generator registry (one Generator per
+	// (NamespaceId, DatabaseId, TableId)). See kvs::dorsid for semantics.
+	sid_registry: Arc<SidRegistry>,
 	// The surrealism cache
 	#[cfg(feature = "surrealism")]
 	surrealism_cache: Arc<SurrealismCache>,
@@ -670,6 +674,7 @@ impl Datastore {
 			cache: Arc::new(DatastoreCache::new()),
 			buckets: self.buckets,
 			sequences: Sequences::new(self.transaction_factory.clone(), self.id),
+			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
 			transaction_factory: self.transaction_factory,
 			#[cfg(feature = "surrealism")]
 			surrealism_cache: Arc::new(SurrealismCache::new()),
@@ -1842,6 +1847,10 @@ impl Datastore {
 		&self.sequences
 	}
 
+	pub(crate) fn sid_registry(&self) -> &Arc<SidRegistry> {
+		&self.sid_registry
+	}
+
 	pub(crate) fn transaction_factory(&self) -> &TransactionFactory {
 		&self.transaction_factory
 	}
@@ -2293,6 +2302,7 @@ impl Datastore {
 			self.index_stores.clone(),
 			self.index_builder.clone(),
 			self.sequences.clone(),
+			self.sid_registry.clone(),
 			self.cache.clone(),
 			#[cfg(feature = "http")]
 			self.http_client.clone(),
