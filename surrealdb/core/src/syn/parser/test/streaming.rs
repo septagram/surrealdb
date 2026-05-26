@@ -286,6 +286,7 @@ fn statements() -> Vec<TopLevelExpr> {
 			comment: Expr::Literal(Literal::None),
 
 			table_type: TableType::Normal,
+			id_generation: crate::sql::IdGeneration::default(),
 		})))),
 		TopLevelExpr::Expr(Expr::Define(Box::new(DefineStatement::Event(DefineEventStatement {
 			kind: DefineKind::Default,

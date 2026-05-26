@@ -11,8 +11,8 @@ use crate::catalog::aggregation::{
 };
 use crate::catalog::providers::{DatabaseProvider, NamespaceProvider, TableProvider};
 use crate::catalog::{
-	DatabaseId, FieldDefinition, Metadata, NamespaceId, Permissions, Record, RecordType,
-	TableDefinition, TableType, ViewDefinition,
+	DatabaseId, FieldDefinition, IdGeneration, Metadata, NamespaceId, Permissions, Record,
+	RecordType, TableDefinition, TableType, ViewDefinition,
 };
 use crate::ctx::FrozenContext;
 use crate::dbs::Options;
@@ -43,6 +43,7 @@ pub(crate) struct DefineTableStatement {
 	pub changefeed: Option<ChangeFeed>,
 	pub comment: Expr,
 	pub table_type: TableType,
+	pub id_generation: IdGeneration,
 }
 
 impl Default for DefineTableStatement {
@@ -58,6 +59,7 @@ impl Default for DefineTableStatement {
 			changefeed: None,
 			comment: Expr::Literal(Literal::None),
 			table_type: TableType::default(),
+			id_generation: IdGeneration::default(),
 		}
 	}
 }
@@ -123,6 +125,7 @@ impl DefineTableStatement {
 			drop: self.drop,
 			schemafull: self.full,
 			table_type: self.table_type.clone(),
+			id_generation: self.id_generation,
 			view: self.view.clone().map(|v| v.to_definition()).transpose()?,
 			permissions: self.permissions.clone(),
 			comment,

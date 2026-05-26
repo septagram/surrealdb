@@ -3,7 +3,7 @@ use surrealdb_types::{SqlFormat, ToSql, write_sql};
 use super::DefineKind;
 use crate::fmt::{CoverStmts, EscapeKwFreeIdent};
 use crate::sql::changefeed::ChangeFeed;
-use crate::sql::{Expr, Literal, Permissions, TableType, View};
+use crate::sql::{Expr, IdGeneration, Literal, Permissions, TableType, View};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -18,6 +18,7 @@ pub(crate) struct DefineTableStatement {
 	pub changefeed: Option<ChangeFeed>,
 	pub comment: Expr,
 	pub table_type: TableType,
+	pub id_generation: IdGeneration,
 }
 
 impl Default for DefineTableStatement {
@@ -33,6 +34,7 @@ impl Default for DefineTableStatement {
 			changefeed: None,
 			comment: Expr::Literal(Literal::None),
 			table_type: TableType::default(),
+			id_generation: IdGeneration::default(),
 		}
 	}
 }
@@ -83,6 +85,11 @@ impl ToSql for DefineTableStatement {
 		} else {
 			" SCHEMALESS"
 		});
+		match self.id_generation {
+			IdGeneration::Default => {}
+			IdGeneration::Sid => f.push_str(" ID SID"),
+			IdGeneration::Rid => f.push_str(" ID RID"),
+		}
 		if !matches!(self.comment, Expr::Literal(Literal::None)) {
 			write_sql!(f, sql_fmt, " COMMENT {}", CoverStmts(&self.comment));
 		}
@@ -116,6 +123,7 @@ impl From<DefineTableStatement> for crate::expr::statements::DefineTableStatemen
 			changefeed: v.changefeed.map(Into::into),
 			comment: v.comment.into(),
 			table_type: v.table_type.into(),
+			id_generation: v.id_generation.into(),
 		}
 	}
 }
@@ -134,6 +142,7 @@ impl From<crate::expr::statements::DefineTableStatement> for DefineTableStatemen
 			changefeed: v.changefeed.map(Into::into),
 			comment: v.comment.into(),
 			table_type: v.table_type.into(),
+			id_generation: v.id_generation.into(),
 		}
 	}
 }

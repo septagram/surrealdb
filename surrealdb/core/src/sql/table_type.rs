@@ -98,3 +98,33 @@ impl From<crate::catalog::Relation> for Relation {
 		}
 	}
 }
+
+/// Surface AST mirror of [`crate::catalog::IdGeneration`]. See that type for semantics.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub enum IdGeneration {
+	#[default]
+	Default,
+	Sid,
+	Rid,
+}
+
+impl From<IdGeneration> for crate::catalog::IdGeneration {
+	fn from(v: IdGeneration) -> Self {
+		match v {
+			IdGeneration::Default => Self::Default,
+			IdGeneration::Sid => Self::Sid,
+			IdGeneration::Rid => Self::Rid,
+		}
+	}
+}
+
+impl From<crate::catalog::IdGeneration> for IdGeneration {
+	fn from(v: crate::catalog::IdGeneration) -> Self {
+		match v {
+			crate::catalog::IdGeneration::Default => Self::Default,
+			crate::catalog::IdGeneration::Sid => Self::Sid,
+			crate::catalog::IdGeneration::Rid => Self::Rid,
+		}
+	}
+}

@@ -60,11 +60,12 @@ use crate::val::{Datetime, TableName, Value};
 	}),
 	comment: Some("comment".to_string()),
 	table_type: TableType::Normal,
+	id_generation: IdGeneration::default(),
 	cache_fields_ts: Uuid::default(),
 	cache_events_ts: Uuid::default(),
 	cache_tables_ts: Uuid::default(),
 	cache_indexes_ts: Uuid::default(),
-}, 149)]
+}, 151)]
 #[case::subscription(SubscriptionDefinition {
 	id: Uuid::default(),
 	node: Uuid::default(),

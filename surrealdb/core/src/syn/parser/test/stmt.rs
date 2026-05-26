@@ -1602,6 +1602,7 @@ fn parse_define_table() {
 			comment: Expr::Literal(Literal::None),
 
 			table_type: TableType::Normal,
+			id_generation: crate::sql::IdGeneration::default(),
 		})))
 	);
 }

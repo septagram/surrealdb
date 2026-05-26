@@ -40,7 +40,7 @@ impl DeserializeRevisioned for TableId {
 	}
 }
 
-#[revisioned(revision = 1)]
+#[revisioned(revision = 2)]
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TableDefinition {
 	pub(crate) namespace_id: NamespaceId,
@@ -54,6 +54,9 @@ pub struct TableDefinition {
 	pub(crate) changefeed: Option<ChangeFeed>,
 	pub(crate) comment: Option<String>,
 	pub(crate) table_type: TableType,
+	/// How auto-generated record ids are minted on this table (Dorsid fork).
+	#[revision(start = 2)]
+	pub(crate) id_generation: IdGeneration,
 
 	/// The last time that a DEFINE FIELD was added to this table
 	pub(crate) cache_fields_ts: Uuid,
@@ -87,6 +90,7 @@ impl TableDefinition {
 			changefeed: None,
 			comment: None,
 			table_type: TableType::default(),
+			id_generation: IdGeneration::default(),
 			cache_fields_ts: now,
 			cache_events_ts: now,
 			cache_tables_ts: now,
@@ -118,6 +122,7 @@ impl TableDefinition {
 				.map(|v| sql::Expr::Literal(sql::Literal::String(v)))
 				.unwrap_or(sql::Expr::Literal(sql::Literal::None)),
 			table_type: self.table_type.clone().into(),
+			id_generation: self.id_generation.into(),
 			..Default::default()
 		}
 	}
@@ -136,12 +141,41 @@ impl InfoStructure for TableDefinition {
 			"drop".to_string() => self.drop.into(),
 			"schemafull".to_string() => self.schemafull.into(),
 			"kind".to_string() => self.table_type.structure(),
+			"id_generation".to_string() => self.id_generation.structure(),
 			"view".to_string(), if let Some(v) = self.view => v.structure(),
 			"changefeed".to_string(), if let Some(v) = self.changefeed => v.structure(),
 			"permissions".to_string() => self.permissions.structure(),
 			"comment".to_string(), if let Some(v) = self.comment => v.into(),
 			"id".to_string() => self.table_id.0.into(),
 		})
+	}
+}
+
+/// How a table's auto-generated record ids are minted when a row is created
+/// without an explicit `id` field.
+///
+/// - `Default`: existing 20-char random string (preserves upstream behaviour).
+/// - `Sid`: Dorsid `Sid` — i64-packed timestamp + realm + per-ms sequence;
+///   monotonic, collision-free within a realm. State is process-local and
+///   warmed up from KV on first use.
+/// - `Rid`: Dorsid `Rid` — i64 with 63-bit CSPRNG payload; stateless,
+///   multi-source safe.
+#[revisioned(revision = 1)]
+#[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
+pub enum IdGeneration {
+	#[default]
+	Default,
+	Sid,
+	Rid,
+}
+
+impl InfoStructure for IdGeneration {
+	fn structure(self) -> Value {
+		match self {
+			IdGeneration::Default => "DEFAULT".into(),
+			IdGeneration::Sid => "SID".into(),
+			IdGeneration::Rid => "RID".into(),
+		}
 	}
 }
 
