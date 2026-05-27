@@ -27,7 +27,13 @@ default = [
     "surrealism",
     "graphql",
     "cli",
+    "server",
 ]
+# Pulls the surrealdb-core `server` umbrella — auth + http + jwks + graphql.
+# This is what makes the hosted-server build complete after customware/002
+# moved embedded-first defaults.
+server = ["surrealdb-core/server", "surrealdb/server"]
+auth = ["surrealdb-core/auth", "surrealdb/auth"]
 http = ["surrealdb-core/http"]
 jwks = ["surrealdb-core/jwks"]
 ml = ["surrealdb/ml"]

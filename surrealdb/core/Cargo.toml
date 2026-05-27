@@ -14,8 +14,18 @@ categories.workspace = true
 license-file.workspace = true
 
 [features]
-# Public features
-default = ["kv-mem", "graphql"]
+# Public features.
+#
+# `default` is intentionally lean (embedded-first per customware/002, D6).
+# Server / hosted SurrealDB builds enable `server` explicitly via the
+# `surrealdb-server` crate. Embedded library users get just `kv-mem` and
+# can layer on what they need with `--features ...`.
+default = ["kv-mem"]
+# Umbrella feature for hosted-server functionality. Pulls every subsystem
+# an HTTP/RPC SurrealDB server needs but an embedded library typically does
+# not. `surrealism` (WASM plugin runtime) is intentionally NOT included —
+# it's orthogonal and stays opt-in for both embedded and hosted users.
+server = ["http", "jwks", "auth", "graphql"]
 kv-mem = [
     "dep:surrealmx",
     "tokio/time",

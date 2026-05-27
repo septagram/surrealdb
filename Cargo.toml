@@ -253,8 +253,14 @@ default = [
     "surrealism",
     "graphql",
     "cli",
+    "server",
 ]
 
+# Pulls the surrealdb-server `server` umbrella so the hosted-server build
+# of the binary stays complete after customware/002 moved embedded-first
+# defaults further down the stack.
+server = ["surrealdb-server/server"]
+auth = ["surrealdb-server/auth"]
 allocator = ["surrealdb-server/allocator"]
 allocation-tracking = ["surrealdb-server/allocation-tracking"]
 http = ["surrealdb-server/http"]
