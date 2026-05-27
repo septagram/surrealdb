@@ -8,6 +8,7 @@ use base64::DecodeError as Base64Error;
 use ext_sort::SortError;
 use fst::Error as FstError;
 use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
+#[cfg(feature = "auth")]
 use jsonwebtoken::errors::Error as JWTError;
 use object_store::Error as ObjectStoreError;
 use revision::Error as RevisionError;
@@ -1292,6 +1293,7 @@ impl From<Base64Error> for Error {
 	}
 }
 
+#[cfg(feature = "auth")]
 impl From<JWTError> for Error {
 	fn from(_: JWTError) -> Error {
 		Error::InvalidAuth

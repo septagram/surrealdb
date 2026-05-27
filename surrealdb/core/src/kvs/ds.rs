@@ -2514,7 +2514,7 @@ impl Datastore {
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "auth"))]
 mod test {
 	use super::*;
 	use crate::iam::verify::verify_root_creds;

@@ -1,6 +1,7 @@
 mod args;
 mod error;
 mod method;
+#[cfg(feature = "auth")]
 mod protocol;
 mod response;
 
@@ -14,6 +15,7 @@ pub use error::{
 };
 pub use format::Format;
 pub use method::Method;
+#[cfg(feature = "auth")]
 pub use protocol::RpcProtocol;
 pub use request::Request;
 pub use response::{DbResponse, DbResult, DbResultStats};
