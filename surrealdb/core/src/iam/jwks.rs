@@ -229,9 +229,8 @@ async fn find_jwk_from_url(kvs: &Datastore, url: &str, kid: &str) -> Result<Jwk>
 		bail!(Error::InvalidAuth); // Return opaque error
 	}
 
-	let cache = kvs.cache();
 	// Attempt to fetch JWKS object from remote location
-	match fetch_jwks_from_url(cache.as_ref(), url, &kvs.config().surrealdb_user_agent).await {
+	match fetch_jwks_from_url(kvs, url).await {
 		Ok(jwks) => {
 			trace!("Successfully fetched JWKS object from remote location");
 			// Attempt to find JWK in JWKS by the key identifier
@@ -288,20 +287,63 @@ fn check_capabilities_url(kvs: &Datastore, url: &str) -> Result<()> {
 	Ok(())
 }
 
+// Builds the HTTP client used to fetch JWKS objects.
+//
+// The JWKS path does not depend on the `http` feature, so it cannot reuse the
+// datastore's protected `HttpClient`. To prevent server-side request forgery
+// (SSRF) via redirects, the client installs a redirect policy that re-validates
+// every redirect target against the datastore's network capabilities — the same
+// allow/deny check applied to the original URL by `check_capabilities_url`.
+// Without this, the default `reqwest` client follows up to 10 redirects to
+// arbitrary hosts (e.g. cloud metadata endpoints) that were never authorised.
+#[cfg(not(target_family = "wasm"))]
+fn build_jwks_client(kvs: &Datastore) -> Result<Client> {
+	use reqwest::redirect::Policy;
+
+	// Snapshot the capabilities and redirect budget so the policy closure (which
+	// must be `'static + Send + Sync`) does not borrow the datastore.
+	let capabilities = Arc::new(kvs.get_capabilities().clone());
+	let max_redirects = kvs.config().max_http_redirects;
+
+	let policy = Policy::custom(move |attempt| {
+		if attempt.previous().len() >= max_redirects {
+			return attempt.stop();
+		}
+		// Extract owned values from the borrowed URL before moving `attempt`.
+		let url_str = attempt.url().to_string();
+		// Re-validate the redirect target host (and explicit port, if any) against
+		// the configured network capabilities, mirroring `check_capabilities_url`.
+		let addr = match (attempt.url().host_str(), attempt.url().port()) {
+			(Some(host), Some(port)) => Some(format!("{host}:{port}")),
+			(Some(host), None) => Some(host.to_string()),
+			(None, _) => None,
+		};
+		match addr.as_deref().map(NetTarget::from_str) {
+			Some(Ok(target)) if capabilities.allows_network_target(&target) => attempt.follow(),
+			_ => {
+				warn!(
+					"Capabilities denied JWKS redirect to disallowed network target: '{url_str}'"
+				);
+				attempt.error(Error::InvalidUrl(url_str))
+			}
+		}
+	});
+
+	Ok(Client::builder().redirect(policy).build()?)
+}
+
 // Attempts to fetch a JWKS object from a remote location and stores it in the
 // cache if successful
-async fn fetch_jwks_from_url(
-	cache: &DatastoreCache,
-	url: &str,
-	user_agent: &str,
-) -> Result<JwkSet> {
+async fn fetch_jwks_from_url(kvs: &Datastore, url: &str) -> Result<JwkSet> {
+	let cache = kvs.cache();
+	#[cfg(not(target_family = "wasm"))]
+	let client = build_jwks_client(kvs)?;
 	#[cfg(target_family = "wasm")]
-	let _ = user_agent;
 	let client = Client::new();
 	let req = client.get(url);
 	// Add a User-Agent header so that WAF rules don't reject the request
 	#[cfg(not(target_family = "wasm"))]
-	let req = req.header(reqwest::header::USER_AGENT, user_agent);
+	let req = req.header(reqwest::header::USER_AGENT, &kvs.config().surrealdb_user_agent);
 	#[cfg(not(target_family = "wasm"))]
 	let res = req.timeout((*REMOTE_TIMEOUT).to_std().expect("valid duration")).send().await?;
 	#[cfg(target_family = "wasm")]
@@ -318,7 +360,7 @@ async fn fetch_jwks_from_url(
 	match serde_json::from_slice::<JwkSet>(&jwks) {
 		Ok(jwks) => {
 			// If successful, cache the JWKS object by its URL
-			store_jwks_in_cache(cache, jwks.clone(), url);
+			store_jwks_in_cache(cache.as_ref(), jwks.clone(), url);
 			Ok(jwks)
 		}
 		Err(err) => {
@@ -964,5 +1006,68 @@ mod tests {
 			Utc::now() - start_time < *REMOTE_TIMEOUT + Duration::seconds(1),
 			"Remote request was not aborted immediately after timeout"
 		);
+	}
+
+	// Reproduction for GHSA-h5rg-8p7f-47g2: SSRF via JWKS URL redirect following.
+	//
+	// The original (allow-listed) JWKS host responds with a 302 redirect to a
+	// different host/port that is NOT allow-listed. Before the fix, the JWKS
+	// client used a bare `reqwest::Client` that follows redirects to arbitrary
+	// hosts, so the request to the internal target was issued (SSRF). After the
+	// fix, the redirect target is re-validated against network capabilities and
+	// the redirect is refused, so the internal server is never contacted.
+	#[tokio::test]
+	#[cfg(not(target_family = "wasm"))]
+	async fn test_redirect_to_unallowed_target_is_blocked() {
+		// The "internal" server an SSRF redirect would attempt to reach. It must
+		// never receive a request (`expect(0)` is verified on drop).
+		let internal_server = MockServer::start().await;
+		let internal_path = format!("{}/jwks.json", random_path());
+		Mock::given(method("GET"))
+			.and(path(&internal_path))
+			.respond_with(ResponseTemplate::new(200).set_body_json(DEFAULT_JWKS.clone()))
+			.expect(0)
+			.mount(&internal_server)
+			.await;
+		let redirect_location = format!("{}/{}", internal_server.uri(), internal_path);
+
+		// The allow-listed server the JWKS URL points at; it 302-redirects to the
+		// internal server, whose port is not part of the allow list.
+		let public_server = MockServer::start().await;
+		let public_path = format!("{}/jwks.json", random_path());
+		Mock::given(method("GET"))
+			.and(path(&public_path))
+			.respond_with(
+				ResponseTemplate::new(302).insert_header("Location", redirect_location.as_str()),
+			)
+			.mount(&public_server)
+			.await;
+
+		// Allow only the public server's exact host:port.
+		let public_port = public_server.address().port();
+		let ds = Datastore::builder()
+			.with_capabilities(Capabilities::default().with_network_targets(
+				Targets::<NetTarget>::Some(
+					[NetTarget::from_str(&format!("127.0.0.1:{public_port}")).unwrap()].into(),
+				),
+			))
+			.build_with_path("memory")
+			.await
+			.unwrap();
+
+		let res = config(
+			&ds,
+			"test_1",
+			&format!("{}/{}", public_server.uri(), public_path),
+			jsonwebtoken::Algorithm::RS256,
+		)
+		.await;
+		assert!(
+			res.is_err(),
+			"JWKS fetch following an SSRF redirect to an unallowed target must fail"
+		);
+
+		// `internal_server` mock is configured with `.expect(0)`: the assertion is
+		// enforced when the server is dropped at the end of the test.
 	}
 }
