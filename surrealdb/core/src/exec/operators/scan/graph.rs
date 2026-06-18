@@ -197,7 +197,10 @@ impl ExecOperator for GraphEdgeScan {
 		// this check a low-privileged user could traverse `->edge` to
 		// enumerate otherwise-hidden relationships, and the `FullEdge` output
 		// mode would additionally return raw record data for tables they
-		// cannot SELECT.
+		// cannot SELECT. `resolve_record_batch` enforces the table-level
+		// permission and — in `FullEdge` mode — additionally applies
+		// field-level SELECT permissions and computed fields, matching a
+		// direct `SELECT *` on the edge table.
 		let check_perms = should_check_perms(&db_ctx, Action::View)?;
 		let input_stream = buffer_stream(
 			self.input.execute(ctx)?,

@@ -149,7 +149,10 @@ impl ExecOperator for ReferenceScan {
 		let db_ctx = ctx.database()?.clone();
 		// SECURITY: reference scan results bypass `Document::pluck_select`, so
 		// the referencing table's SELECT permission must be enforced here
-		// (same family as the graph scan check).
+		// (same family as the graph scan check). `resolve_record_batch`
+		// enforces the table-level permission and — in `FullRecord` mode —
+		// additionally applies field-level SELECT permissions and computed
+		// fields, matching a direct `SELECT *` on the referencing table.
 		let check_perms = should_check_perms(&db_ctx, Action::View)?;
 		let input_stream = buffer_stream(
 			self.input.execute(ctx)?,
