@@ -70,7 +70,17 @@ impl CreateInfo {
 		};
 		// File access (e.g. `DEFINE ANALYZER ... mapper('<path>')`) is denied by
 		// default unless `file_allowlist` is configured. Tests that read mapper
-		// data files reference them under `../tests/data`, so allow that tree.
+		// data files reference them under the `tests` tree, so allow it.
+		//
+		// `"../tests"` is resolved relative to the test runner's CWD and
+		// canonicalized at parse time, which assumes the harness is invoked as
+		// `cd language-tests && cargo run run` (the documented entrypoint). If
+		// the harness is ever run from a different CWD, `../tests` fails to
+		// canonicalize, `extract_allowed_paths` drops it (with only a `warn!`
+		// log, which the test runner does not surface by default), and the
+		// now-empty allowlist denies *all* `mapper()` access — every mapper test
+		// would then fail with `File access denied`. This also sets a single
+		// global allowlist shared by every language test.
 		let builder = Datastore::builder()
 			.with_capabilities(cap)
 			.with_auth(true)
