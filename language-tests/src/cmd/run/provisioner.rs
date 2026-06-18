@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use surrealdb_core::channel;
+use surrealdb_core::cnf::ConfigMap;
 use surrealdb_core::dbs::Capabilities;
 use surrealdb_core::dbs::capabilities::Targets;
 use surrealdb_core::kvs::{Datastore, LockType, TransactionType};
@@ -67,10 +68,14 @@ impl CreateInfo {
 			Some(d) => std::path::PathBuf::from(d),
 			None => std::env::temp_dir(),
 		};
+		// File access (e.g. `DEFINE ANALYZER ... mapper('<path>')`) is denied by
+		// default unless `file_allowlist` is configured. Tests that read mapper
+		// data files reference them under `../tests/data`, so allow that tree.
 		let builder = Datastore::builder()
 			.with_capabilities(cap)
 			.with_auth(true)
-			.with_temporary_directory(Some(sort_temp_dir));
+			.with_temporary_directory(Some(sort_temp_dir))
+			.with_config(ConfigMap::empty().with_key_value("file_allowlist", "../tests"));
 
 		let builder = if allows_live {
 			let (send, _) = channel::bounded(15_000);
