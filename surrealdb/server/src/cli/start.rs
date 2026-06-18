@@ -223,10 +223,6 @@ pub async fn init<
 	}: StartCommandArguments,
 	runtime: ObservabilityRuntime,
 ) -> Result<()> {
-	// Install the rustls process-default crypto provider before any TLS
-	// operations occur. Under `feature = "fips"` this asserts FIPS mode is
-	// active and aborts startup otherwise.
-	crate::tls::install_default_crypto_provider()?;
 	// Check the path is valid
 	C::path_valid(&path)?;
 	// Check if we should output a banner
