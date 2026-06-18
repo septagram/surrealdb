@@ -801,6 +801,17 @@ pub(crate) fn filter_field_state_for_projection(
 
 	FieldState {
 		computed_fields,
+		// SECURITY: `field_permissions` is retained in full here — it is
+		// deliberately NOT filtered down to the projection. Field-level SELECT
+		// permissions must be enforced for every restricted field on the table
+		// regardless of whether it appears in the projection (a restricted
+		// field can be referenced only by WHERE/ORDER BY). The value-ordering
+		// guard in `operators/scan/dynamic.rs`
+		// (`order_touches_restricted_select_field`) also reads this list to
+		// decide whether an `ORDER BY` targets a restricted field, so filtering
+		// it by projection would let `SELECT id ... ORDER BY <restricted>`
+		// (where the field is sorted on but not projected) slip past the guard
+		// and re-open the value-ordering oracle.
 		field_permissions: Arc::clone(&full_state.field_permissions),
 		dep_map: Arc::clone(&full_state.dep_map),
 		permission_field_deps: Arc::clone(&full_state.permission_field_deps),

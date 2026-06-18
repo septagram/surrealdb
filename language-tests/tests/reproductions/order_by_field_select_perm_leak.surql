@@ -17,6 +17,14 @@ value = "[secret:1, secret:2, secret:3]"
 [[test.results]]
 value = "[secret:1, secret:2, secret:3]"
 
+# ORDER BY code LIMIT 2: exercises the TopK / LIMIT pushdown path. The threshold
+# probe is disarmed for permission-restricted fields (see field_state_blocks_raw_read
+# in topk_pushdown.rs), so the scan stays in record-id order and the LIMIT takes the
+# first two record-id-ordered rows rather than the two smallest hidden values. With
+# the leak this would be [secret:2, secret:3] (hidden a, c).
+[[test.results]]
+value = "[secret:1, secret:2]"
+
 # Confidentiality is preserved: the restricted field is nulled for the non-owner.
 [[test.results]]
 value = "[{ code: NONE }, { code: NONE }, { code: NONE }]"
@@ -25,4 +33,5 @@ value = "[{ code: NONE }, { code: NONE }, { code: NONE }]"
 
 SELECT VALUE id FROM secret ORDER BY code;
 SELECT VALUE id FROM secret ORDER BY code DESC;
+SELECT VALUE id FROM secret ORDER BY code LIMIT 2;
 SELECT code FROM secret;

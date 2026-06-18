@@ -1275,23 +1275,33 @@ impl<'ctx> Planner<'ctx> {
 			let table_ctx: Option<ResolvedTableContext> =
 				self.try_resolve_table_ctx(table_name).await;
 
-			// SECURITY (value-ordering oracle): if any ORDER BY idiom is
-			// governed by a non-`Full` field-level SELECT permission, withhold
-			// the ORDER BY from access-path selection. Otherwise the planner
-			// would pick an index that walks the restricted field in true value
-			// order; the value is later reduced to NULL, but the emitted row
-			// order — preserved through the stable post-reduce Sort — would leak
-			// the hidden values' relative ordering across other users' records.
-			// Withholding it keeps the source in record-id order and forces an
-			// explicit Sort over the reduced (NULL) keys.
+			// SECURITY (value-ordering oracle): resolve once which field paths
+			// on this table carry a non-`Full` SELECT permission for the
+			// current actor. The result is reused by both the ORDER BY guard
+			// just below and the `UnionIndexScan` WHERE guard, so a query with
+			// a restricted WHERE *and* a restricted ORDER BY performs a single
+			// `all_tb_fields` lookup instead of two.
+			let restricted_select = self.resolve_restricted_select_prefixes(table_name).await;
+
+			// If any ORDER BY idiom is governed by a non-`Full` field-level
+			// SELECT permission, withhold the ORDER BY from access-path
+			// selection. Otherwise the planner would pick an index that walks
+			// the restricted field in true value order; the value is later
+			// reduced to NULL, but the emitted row order — preserved through
+			// the stable post-reduce Sort — would leak the hidden values'
+			// relative ordering across other users' records. Withholding it
+			// keeps the source in record-id order and forces an explicit Sort
+			// over the reduced (NULL) keys.
+			//
+			// This guards only the plan-time access path. The runtime-resolved
+			// `DynamicScan` fallback — reached when planning is txn-less, or
+			// when `resolve_access_path` returns `Ok(None)`/`Err` — applies the
+			// equivalent guard at execute time in `operators/scan/dynamic.rs`,
+			// where the actor's real field permissions are known (so it cannot
+			// over-apply to privileged users the way a conservative plan-time
+			// `AssumeRestricted` would).
 			let order = match order {
-				Some(o)
-					if self
-						.order_touches_restricted_select_field_for_table(table_name, o)
-						.await =>
-				{
-					None
-				}
+				Some(o) if restricted_select.order_touches(o) => None,
 				other => other,
 			};
 
@@ -1394,6 +1404,7 @@ impl<'ctx> Planner<'ctx> {
 								table_ctx,
 								knn_ctx,
 								downstream_topk,
+								&restricted_select,
 							)
 							.await;
 					}
@@ -1738,6 +1749,7 @@ impl<'ctx> Planner<'ctx> {
 		table_ctx: Option<ResolvedTableContext>,
 		knn_ctx: Option<Arc<crate::exec::function::KnnContext>>,
 		downstream_topk: bool,
+		restricted_select: &RestrictedPrefixes,
 	) -> Result<PlannedSource, Error> {
 		// Enable merge-sort by record ID when ORDER BY is `id ASC/DESC`
 		// only and every sub-path is an equality B-tree scan (each one
@@ -1829,7 +1841,9 @@ impl<'ctx> Planner<'ctx> {
 		// hidden value. Leaving the leaf in the residual filter forces
 		// the post-permission recheck and closes that channel.
 		let filter_action = if let Some(c) = cond {
-			let strip_safe = !self.cond_touches_restricted_select_field_for_table(&table, c).await;
+			// Reuses the prefixes resolved once in `plan_source` for this same
+			// table, so the union path performs no extra `all_tb_fields` lookup.
+			let strip_safe = !restricted_select.cond_touches(c);
 			let stripped = if strip_safe {
 				strip_union_index_conditions(c, &paths)
 			} else {
@@ -2211,68 +2225,20 @@ impl<'ctx> Planner<'ctx> {
 	}
 
 	/// Core of [`Self::cond_touches_restricted_select_field`] that operates
-	/// on an already-resolved table name and condition. Also used by the
-	/// `UnionIndexScan` planner to decide whether
+	/// on an already-resolved table name and condition. The `UnionIndexScan`
+	/// planner makes the equivalent decision (whether
 	/// `strip_union_index_conditions` is safe — the union sub-operators
 	/// don't re-evaluate the WHERE leaf after field-level permissions, so
 	/// stripping a leaf on a restricted field would turn the index entries
-	/// themselves into a membership oracle.
+	/// themselves into a membership oracle) by calling
+	/// [`RestrictedPrefixes::cond_touches`] directly on prefixes it already
+	/// has on hand, avoiding a redundant catalog lookup.
 	async fn cond_touches_restricted_select_field_for_table(
 		&self,
 		table_name: &TableName,
 		cond: &Cond,
 	) -> bool {
-		let restricted_prefixes = match self.resolve_restricted_select_prefixes(table_name).await {
-			RestrictedPrefixes::AssumeRestricted => return true,
-			RestrictedPrefixes::None => return false,
-			RestrictedPrefixes::Some(p) => p,
-		};
-		let mut checker = RestrictedIdiomChecker {
-			restricted_prefixes: &restricted_prefixes,
-			found: false,
-		};
-		use crate::expr::visit::Visitor;
-		let _ = checker.visit_expr(&cond.0);
-		checker.found
-	}
-
-	/// SECURITY (value-ordering oracle): returns `true` when any `ORDER BY`
-	/// idiom references a field whose SELECT permission is not `Full` for the
-	/// current actor.
-	///
-	/// An index scan walks the B-tree in the indexed field's true value order
-	/// and emits records in that order, while field-level reduction nulls the
-	/// restricted value in the projected output. A stable post-reduce `Sort`
-	/// over the (now all-`NULL`) keys preserves the source order, so the row
-	/// order would still encode the hidden values' relative ordering. Callers
-	/// use this to withhold a restricted `ORDER BY` from access-path selection,
-	/// keeping the source in record-id order so no ordering oracle is exposed.
-	async fn order_touches_restricted_select_field_for_table(
-		&self,
-		table_name: &TableName,
-		order: &OrderClause,
-	) -> bool {
-		// `ORDER BY RAND()` references no field and cannot leak ordering.
-		let OrderClause::Order(order_list) = order else {
-			return false;
-		};
-		let restricted_prefixes = match self.resolve_restricted_select_prefixes(table_name).await {
-			RestrictedPrefixes::AssumeRestricted => return true,
-			RestrictedPrefixes::None => return false,
-			RestrictedPrefixes::Some(p) => p,
-		};
-		let mut checker = RestrictedIdiomChecker {
-			restricted_prefixes: &restricted_prefixes,
-			found: false,
-		};
-		use crate::expr::visit::Visitor;
-		for order in order_list.iter() {
-			let _ = checker.visit_idiom(&order.value);
-			if checker.found {
-				return true;
-			}
-		}
-		false
+		self.resolve_restricted_select_prefixes(table_name).await.cond_touches(cond)
 	}
 
 	/// Resolve which field-path prefixes on `table_name` are governed by a
@@ -2532,6 +2498,82 @@ enum RestrictedPrefixes {
 	/// These field-path prefixes are governed by a non-`Full` SELECT
 	/// permission.
 	Some(Vec<Idiom>),
+}
+
+impl RestrictedPrefixes {
+	/// Returns `true` when the WHERE `cond` references a field governed by a
+	/// non-`Full` SELECT permission for the current actor (or when restriction
+	/// must be conservatively assumed because plan-time context is missing).
+	///
+	/// Used to keep an index fast path from turning index entries into a
+	/// membership oracle for a value the actor cannot read.
+	fn cond_touches(&self, cond: &Cond) -> bool {
+		let prefixes = match self {
+			RestrictedPrefixes::AssumeRestricted => return true,
+			RestrictedPrefixes::None => return false,
+			RestrictedPrefixes::Some(p) => p,
+		};
+		let mut checker = RestrictedIdiomChecker {
+			restricted_prefixes: prefixes,
+			found: false,
+		};
+		use crate::expr::visit::Visitor;
+		let _ = checker.visit_expr(&cond.0);
+		checker.found
+	}
+
+	/// SECURITY (value-ordering oracle): returns `true` when any top-level
+	/// `ORDER BY` idiom references a field whose SELECT permission is not
+	/// `Full` for the current actor (or when restriction must be conservatively
+	/// assumed because plan-time context is missing).
+	///
+	/// An index scan walks the B-tree in the indexed field's true value order
+	/// and emits records in that order, while field-level reduction nulls the
+	/// restricted value in the projected output. A stable post-reduce `Sort`
+	/// over the (now all-`NULL`) keys preserves the source order, so the row
+	/// order would still encode the hidden values' relative ordering. Callers
+	/// use this to withhold a restricted `ORDER BY` from access-path selection,
+	/// keeping the source in record-id order so no ordering oracle is exposed.
+	///
+	/// The match is intentionally shallow: each `Order.value` is a plain top-
+	/// level `Idiom`, matched via `Idiom::starts_with(prefix)`. An index-
+	/// ordering leak requires the index to cover the field directly, so a
+	/// restricted field referenced only *inside* an idiom filter (e.g.
+	/// `ORDER BY foo[WHERE code = …]`) is not an indexable ordering and cannot
+	/// leak through this vector. This is the same shallow-match property as the
+	/// WHERE guard ([`Self::cond_touches`]).
+	///
+	/// OUT OF SCOPE (parent/child nested-field gap): `starts_with(prefix)`
+	/// catches ordering by a restricted field *or a descendant of it*
+	/// (`ORDER BY meta` when `meta` is restricted, or `ORDER BY meta.sub` when
+	/// `meta` is restricted), but NOT ordering by a *parent* of a restricted
+	/// child (`ORDER BY meta` when only `meta.secret` is restricted). Ordering
+	/// by the parent object can, with a covering index, still encode the
+	/// child's relative ordering. This is a narrower, separate vector — like
+	/// the compound-index caveat in #394 — and is not addressed here.
+	fn order_touches(&self, order: &OrderClause) -> bool {
+		// `ORDER BY RAND()` references no field and cannot leak ordering.
+		let OrderClause::Order(order_list) = order else {
+			return false;
+		};
+		let prefixes = match self {
+			RestrictedPrefixes::AssumeRestricted => return true,
+			RestrictedPrefixes::None => return false,
+			RestrictedPrefixes::Some(p) => p,
+		};
+		let mut checker = RestrictedIdiomChecker {
+			restricted_prefixes: prefixes,
+			found: false,
+		};
+		use crate::expr::visit::Visitor;
+		for order in order_list.iter() {
+			let _ = checker.visit_idiom(&order.value);
+			if checker.found {
+				return true;
+			}
+		}
+		false
+	}
 }
 
 /// Visitor that walks a `Cond` expression looking for any idiom governed by
