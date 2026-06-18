@@ -329,6 +329,7 @@ impl<'de> Deserialize<'de> for TestDuration {
 				let settings = ParserSettings {
 					object_recursion_limit: 100,
 					query_recursion_limit: 100,
+					expr_recursion_limit: 100,
 					legacy_strands: false,
 					flexible_record_id: true,
 					files_enabled: true,
@@ -580,6 +581,7 @@ impl<'de> Deserialize<'de> for SurrealConfigValue {
 		let settings = ParserSettings {
 			object_recursion_limit: 100,
 			query_recursion_limit: 100,
+			expr_recursion_limit: 100,
 			legacy_strands: false,
 			flexible_record_id: true,
 			files_enabled: true,
@@ -643,6 +645,7 @@ impl<'de> Deserialize<'de> for SurrealRecordId {
 		let settings = ParserSettings {
 			object_recursion_limit: 100,
 			query_recursion_limit: 100,
+			expr_recursion_limit: 100,
 			legacy_strands: false,
 			flexible_record_id: true,
 			files_enabled: true,
@@ -686,6 +689,7 @@ impl<'de> Deserialize<'de> for SurrealObject {
 		let settings = ParserSettings {
 			object_recursion_limit: 100,
 			query_recursion_limit: 100,
+			expr_recursion_limit: 100,
 			legacy_strands: false,
 			flexible_record_id: true,
 			files_enabled: true,

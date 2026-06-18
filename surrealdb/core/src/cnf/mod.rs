@@ -185,6 +185,14 @@ pub struct CommonConfig {
 	pub max_object_parsing_depth: u32,
 	/// Specifies how deep the parser will parse recursive queries (default: 20)
 	pub max_query_parsing_depth: u32,
+	/// Specifies how deep the parser will build an expression operator tree
+	/// before erroring. Bounds left-associative operator spines (e.g.
+	/// `1 + 1 + 1 + ...`) and prefix/postfix chains, which are otherwise
+	/// unbounded and overflow the call stack when the resulting tree is later
+	/// walked recursively (e.g. dropped, formatted, or lowered to `expr::Expr`).
+	/// Kept low enough that even those recursive walks stay well within a
+	/// conservative worker-thread stack (default: 128)
+	pub max_expression_parsing_depth: u32,
 	/// The maximum recursive idiom path depth allowed (default: 256)
 	pub idiom_recursion_limit: u32,
 	/// The maximum size of a compiled regular expression (default: 10 MiB)
@@ -301,6 +309,7 @@ impl Default for CommonConfig {
 			max_computation_depth: 120,
 			max_object_parsing_depth: 100,
 			max_query_parsing_depth: 20,
+			max_expression_parsing_depth: 128,
 			idiom_recursion_limit: 256,
 			regex_size_limit: 10 * 1024 * 1024,
 			regex_cache_size: 1_000,
@@ -349,6 +358,7 @@ impl Config for CommonConfig {
 		.parse_key("max_computation_depth", &mut self.max_computation_depth)
 		.parse_key("max_object_parsing_depth", &mut self.max_object_parsing_depth)
 		.parse_key("max_query_parsing_depth", &mut self.max_query_parsing_depth)
+		.parse_key("max_expression_parsing_depth", &mut self.max_expression_parsing_depth)
 		.parse_key("regex_size_limit", &mut self.regex_size_limit)
 		.parse_key("regex_cache_size", &mut self.regex_cache_size)
 		.parse_key("transaction_cache_size", &mut self.transaction_cache_size)

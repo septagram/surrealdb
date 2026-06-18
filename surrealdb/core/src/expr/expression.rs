@@ -827,6 +827,7 @@ impl DeserializeRevisioned for Expr {
 				// So it should be relatively safe to parse this without a limit.
 				object_recursion_limit: usize::MAX,
 				query_recursion_limit: usize::MAX,
+				expr_recursion_limit: usize::MAX,
 				..Default::default()
 			},
 			async |p, stk| p.parse_expr(stk).await,
