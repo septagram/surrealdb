@@ -1275,6 +1275,26 @@ impl<'ctx> Planner<'ctx> {
 			let table_ctx: Option<ResolvedTableContext> =
 				self.try_resolve_table_ctx(table_name).await;
 
+			// SECURITY (value-ordering oracle): if any ORDER BY idiom is
+			// governed by a non-`Full` field-level SELECT permission, withhold
+			// the ORDER BY from access-path selection. Otherwise the planner
+			// would pick an index that walks the restricted field in true value
+			// order; the value is later reduced to NULL, but the emitted row
+			// order — preserved through the stable post-reduce Sort — would leak
+			// the hidden values' relative ordering across other users' records.
+			// Withholding it keeps the source in record-id order and forces an
+			// explicit Sort over the reduced (NULL) keys.
+			let order = match order {
+				Some(o)
+					if self
+						.order_touches_restricted_select_field_for_table(table_name, o)
+						.await =>
+				{
+					None
+				}
+				other => other,
+			};
+
 			let resolved =
 				self.resolve_access_path(txn, ns, db, table_name, cond, order, with).await;
 			if let Ok(Some((access_path, direction))) = resolved {
@@ -2202,19 +2222,79 @@ impl<'ctx> Planner<'ctx> {
 		table_name: &TableName,
 		cond: &Cond,
 	) -> bool {
+		let restricted_prefixes = match self.resolve_restricted_select_prefixes(table_name).await {
+			RestrictedPrefixes::AssumeRestricted => return true,
+			RestrictedPrefixes::None => return false,
+			RestrictedPrefixes::Some(p) => p,
+		};
+		let mut checker = RestrictedIdiomChecker {
+			restricted_prefixes: &restricted_prefixes,
+			found: false,
+		};
+		use crate::expr::visit::Visitor;
+		let _ = checker.visit_expr(&cond.0);
+		checker.found
+	}
+
+	/// SECURITY (value-ordering oracle): returns `true` when any `ORDER BY`
+	/// idiom references a field whose SELECT permission is not `Full` for the
+	/// current actor.
+	///
+	/// An index scan walks the B-tree in the indexed field's true value order
+	/// and emits records in that order, while field-level reduction nulls the
+	/// restricted value in the projected output. A stable post-reduce `Sort`
+	/// over the (now all-`NULL`) keys preserves the source order, so the row
+	/// order would still encode the hidden values' relative ordering. Callers
+	/// use this to withhold a restricted `ORDER BY` from access-path selection,
+	/// keeping the source in record-id order so no ordering oracle is exposed.
+	async fn order_touches_restricted_select_field_for_table(
+		&self,
+		table_name: &TableName,
+		order: &OrderClause,
+	) -> bool {
+		// `ORDER BY RAND()` references no field and cannot leak ordering.
+		let OrderClause::Order(order_list) = order else {
+			return false;
+		};
+		let restricted_prefixes = match self.resolve_restricted_select_prefixes(table_name).await {
+			RestrictedPrefixes::AssumeRestricted => return true,
+			RestrictedPrefixes::None => return false,
+			RestrictedPrefixes::Some(p) => p,
+		};
+		let mut checker = RestrictedIdiomChecker {
+			restricted_prefixes: &restricted_prefixes,
+			found: false,
+		};
+		use crate::expr::visit::Visitor;
+		for order in order_list.iter() {
+			let _ = checker.visit_idiom(&order.value);
+			if checker.found {
+				return true;
+			}
+		}
+		false
+	}
+
+	/// Resolve which field-path prefixes on `table_name` are governed by a
+	/// non-`Full` SELECT permission for the current actor. Shared by the
+	/// WHERE-clause and ORDER BY plan-time guards.
+	async fn resolve_restricted_select_prefixes(
+		&self,
+		table_name: &TableName,
+	) -> RestrictedPrefixes {
 		let (Some(ns_name), Some(db_name)) = (self.ns.as_deref(), self.db.as_deref()) else {
 			// No catalog access at plan time — conservatively assume
 			// permissions could apply.
-			return true;
+			return RestrictedPrefixes::AssumeRestricted;
 		};
 		if !self.should_check_perms_for_view(ns_name, db_name) {
-			return false;
+			return RestrictedPrefixes::None;
 		}
 		let Some(txn) = self.txn.as_ref() else {
-			return true;
+			return RestrictedPrefixes::AssumeRestricted;
 		};
 		let Some((ns_id, db_id)) = self.ns_db_ids().await else {
-			return true;
+			return RestrictedPrefixes::AssumeRestricted;
 		};
 		let fields = match txn.all_tb_fields(ns_id, db_id, table_name, None).await {
 			Ok(fs) => fs,
@@ -2223,10 +2303,10 @@ impl<'ctx> Planner<'ctx> {
 					table = %table_name,
 					error = %e,
 					"plan-time field list failed in \
-					 cond_touches_restricted_select_field_for_table; \
-					 conservatively disabling index-strip fast paths",
+					 resolve_restricted_select_prefixes; \
+					 conservatively disabling index fast paths",
 				);
-				return true;
+				return RestrictedPrefixes::AssumeRestricted;
 			}
 		};
 		// Collect the field paths that are not unconditionally SELECT-able.
@@ -2236,15 +2316,10 @@ impl<'ctx> Planner<'ctx> {
 			.map(|f| f.name.clone())
 			.collect();
 		if restricted_prefixes.is_empty() {
-			return false;
+			RestrictedPrefixes::None
+		} else {
+			RestrictedPrefixes::Some(restricted_prefixes)
 		}
-		let mut checker = RestrictedIdiomChecker {
-			restricted_prefixes: &restricted_prefixes,
-			found: false,
-		};
-		use crate::expr::visit::Visitor;
-		let _ = checker.visit_expr(&cond.0);
-		checker.found
 	}
 
 	/// Resolve a B-tree index access path covering the WHERE condition for
@@ -2443,6 +2518,20 @@ impl<'ctx> Planner<'ctx> {
 
 		Ok(Some((path, direction)))
 	}
+}
+
+/// Outcome of resolving which fields on a table carry a non-`Full` SELECT
+/// permission for the current actor.
+enum RestrictedPrefixes {
+	/// Plan-time catalog/permission context is unavailable; callers must
+	/// conservatively assume a restricted field could be referenced.
+	AssumeRestricted,
+	/// The actor sees the table with full field permissions, or no field is
+	/// restricted — index fast paths are safe.
+	None,
+	/// These field-path prefixes are governed by a non-`Full` SELECT
+	/// permission.
+	Some(Vec<Idiom>),
 }
 
 /// Visitor that walks a `Cond` expression looking for any idiom governed by
