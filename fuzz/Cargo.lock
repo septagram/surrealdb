@@ -1006,12 +1006,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "endian-type"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2209,15 +2203,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
-name = "nibble_vec"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
-dependencies = [
- "smallvec",
-]
-
-[[package]]
 name = "noisy_float"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2818,17 +2803,6 @@ name = "radium"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
-
-[[package]]
-name = "radix_trie"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4431027dcd37fc2a73ef740b5f233aa805897935b8bce0195e41bbf9a3289a"
-dependencies = [
- "endian-type",
- "nibble_vec",
- "serde",
-]
 
 [[package]]
 name = "rand"
@@ -3544,7 +3518,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surrealdb-collections"
-version = "3.2.0-nightly"
+version = "3.2.0-beta.1"
 dependencies = [
  "revision",
  "storekey",
@@ -3552,7 +3526,7 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-core"
-version = "3.2.0-nightly"
+version = "3.2.0-beta.1"
 dependencies = [
  "addr",
  "affinitypool",
@@ -3605,7 +3579,6 @@ dependencies = [
  "phf 0.13.1",
  "pin-project-lite",
  "quick_cache",
- "radix_trie",
  "rand 0.9.4",
  "rand_core 0.6.4",
  "rayon",
@@ -3683,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-strand"
-version = "3.2.0-nightly"
+version = "3.2.0-beta.1"
 dependencies = [
  "arbitrary",
  "revision",
@@ -3693,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types"
-version = "3.2.0-nightly"
+version = "3.2.0-beta.1"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -3721,7 +3694,7 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types-derive"
-version = "3.2.0-nightly"
+version = "3.2.0-beta.1"
 dependencies = [
  "heck 0.4.1",
  "proc-macro2",
