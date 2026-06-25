@@ -336,3 +336,11 @@ e0ebefee Capture Dorsid first-class-IDs work as customware/001
 09893a8a Add auth feature, gate the credential pipeline behind it (customware/002)
 fcc1772b Add `server` umbrella feature and swap defaults          (customware/002)
 ```
+
+## v3.1.5 reapplication notes
+
+- Reapplied the `auth`/`jwks` feature split and embedded-first defaults onto upstream `v3.1.5`.
+- Kept upstream's existing `surrealism = ["dep:surrealism-runtime", "dep:async-trait"]` feature wiring while restoring the customware `server`, `auth`, and `jwks` feature relationships.
+- Updated the SDK command/router token carrier to use the public `surrealdb::opt::auth::Token` instead of `surrealdb_core::iam::Token`, because the core token type is now gated behind `feature = "auth"`.
+- Added embedded-router `#[cfg(feature = "auth")]` conversion helpers for local signin/signup/authenticate/refresh/revoke flows, with a clear query error when those auth-only operations are invoked from an auth-free embedded build.
+- Verification during reapplication: `cargo check -p surrealdb --no-default-features --features kv-mem` and `cargo check -p surrealdb --no-default-features --features kv-mem,auth` pass on this Windows host, with only pre-existing/upstream warnings.

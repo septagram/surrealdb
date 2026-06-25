@@ -14,8 +14,18 @@ categories.workspace = true
 license-file.workspace = true
 
 [features]
-# Public features
-default = ["kv-mem", "graphql"]
+# Public features.
+#
+# `default` is intentionally lean (embedded-first per customware/002, D6).
+# Server / hosted SurrealDB builds enable `server` explicitly via the
+# `surrealdb-server` crate. Embedded library users get just `kv-mem` and
+# can layer on what they need with `--features ...`.
+default = ["kv-mem"]
+# Umbrella feature for hosted-server functionality. Pulls every subsystem
+# an HTTP/RPC SurrealDB server needs but an embedded library typically does
+# not. `surrealism` (WASM plugin runtime) is intentionally NOT included —
+# it's orthogonal and stays opt-in for both embedded and hosted users.
+server = ["http", "jwks", "auth", "graphql"]
 kv-mem = [
     "dep:surrealmx",
     "tokio/time",
@@ -42,7 +52,11 @@ kv-surrealkv = [
 scripting = ["dep:js"]
 http = ["dep:reqwest"]
 ml = ["dep:surrealml-core"]
-jwks = ["dep:reqwest"]
+# Gates the IAM credential pipeline (signin/signup/verify/issue/token/jwks)
+# and pulls jsonwebtoken. Without it, only Session::owner() works; DEFINE
+# USER / DEFINE ACCESS execute with an "unsupported" error.
+auth = ["dep:jsonwebtoken"]
+jwks = ["auth", "dep:reqwest"]
 surrealism = ["dep:surrealism-runtime", "dep:async-trait"]
 allocator = ["dep:jemallocator", "dep:mimalloc"]
 arbitrary = [
@@ -185,7 +199,7 @@ mime = "0.3.17"
 # WASM DEPENDENCY CONFIGURATION
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
-jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+jsonwebtoken = { workspace = true, features = ["rust_crypto"], optional = true }
 ring = { workspace = true, features = ["wasm32_unknown_unknown_js"] }
 surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers"] }
 tokio = { workspace = true, default-features = false, features = [
@@ -212,7 +226,7 @@ diskann-vector.workspace = true
 # Note: surrealism-runtime is only available on non-WASM targets
 # The surrealism feature will be enabled by default for non-WASM in the parent workspace
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"], optional = true }
 surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers", "rpc"] }
 tokio = { workspace = true, default-features = false, features = [
     "macros",

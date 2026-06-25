@@ -102,10 +102,10 @@ pub mod http;
 #[cfg_attr(docsrs, doc(cfg(feature = "protocol-ws")))]
 pub mod ws;
 
-use surrealdb_core::iam::token::Token;
 use uuid::Uuid;
 
 use crate::conn::cmd::Command;
+use crate::opt::auth::Token;
 use crate::types::{Array, SurrealValue, Value};
 
 /// A struct which will be serialized as a map to behave like the previously
@@ -172,13 +172,7 @@ impl Command {
 				// Extract only the access token for authentication.
 				// If the token has a refresh component, we ignore it here
 				// as authentication only needs the access token.
-				params: Some(Value::Array(Array::from(vec![match token {
-					Token::Access(access) => access.into_value(),
-					Token::WithRefresh {
-						access,
-						..
-					} => access.into_value(),
-				}]))),
+				params: Some(Value::Array(Array::from(vec![token.access.into_value()]))),
 				txn: None,
 				session_id,
 			},

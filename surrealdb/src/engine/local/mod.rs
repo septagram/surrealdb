@@ -193,8 +193,11 @@ use crate::conn::Command;
 use crate::conn::MlExportConfig;
 use crate::engine::SessionError;
 use crate::opt::IntoEndpoint;
+#[cfg(feature = "auth")]
 use crate::opt::auth::{AccessToken, RefreshToken, SecureToken, Token};
-use crate::types::{HashMap, Notification, SurrealValue, ToSql, Value, Variables};
+#[cfg(feature = "auth")]
+use crate::types::SurrealValue;
+use crate::types::{HashMap, Notification, ToSql, Value, Variables};
 use crate::{Connect, Surreal};
 
 /// In-memory database
@@ -602,6 +605,55 @@ async fn kill_live_query(
 	Ok(results)
 }
 
+#[cfg(feature = "auth")]
+fn sdk_token_from_core(token: iam::Token) -> Token {
+	match token {
+		iam::Token::Access(token) => Token {
+			access: AccessToken(SecureToken(token)),
+			refresh: None,
+		},
+		iam::Token::WithRefresh {
+			access,
+			refresh,
+		} => Token {
+			access: AccessToken(SecureToken(access)),
+			refresh: Some(RefreshToken(SecureToken(refresh))),
+		},
+	}
+}
+
+#[cfg(feature = "auth")]
+fn core_token_from_sdk(token: Token) -> iam::Token {
+	match token.refresh {
+		Some(refresh) => iam::Token::WithRefresh {
+			access: token.access.into_insecure_token(),
+			refresh: refresh.into_insecure_token(),
+		},
+		None => iam::Token::Access(token.access.into_insecure_token()),
+	}
+}
+
+#[cfg(feature = "auth")]
+async fn refresh_auth_token(
+	token: Token,
+	kvs: &Datastore,
+	session: &mut Session,
+) -> anyhow::Result<Token> {
+	core_token_from_sdk(token).refresh(kvs, session).await.map(sdk_token_from_core)
+}
+
+#[cfg(feature = "auth")]
+async fn revoke_refresh_token(token: Token, kvs: &Datastore) -> anyhow::Result<()> {
+	core_token_from_sdk(token).revoke_refresh_token(kvs).await
+}
+
+#[cfg(not(feature = "auth"))]
+fn auth_feature_disabled() -> Vec<QueryResult> {
+	vec![QueryResultBuilder::started_now().finish_with_result(Err(TypesError::internal(
+		"Authentication support is not enabled in this build".to_string(),
+	)))]
+}
+
 async fn router(
 	kvs: &Arc<Datastore>,
 	state: &SessionState,
@@ -621,77 +673,70 @@ async fn router(
 		Command::Signup {
 			credentials,
 		} => {
-			let query_result = QueryResultBuilder::started_now();
-			let signup_data = {
-				iam::signup::signup(kvs, &mut *state.session.write().await, credentials.into())
-					.await
-					.map_err(surrealdb_core::err::anyhow_to_types_error)?
-			};
-			let token = match signup_data {
-				iam::Token::Access(token) => Token {
-					access: AccessToken(SecureToken(token)),
-					refresh: None,
-				},
-				iam::Token::WithRefresh {
-					access: token,
-					refresh,
-				} => Token {
-					access: AccessToken(SecureToken(token)),
-					refresh: Some(RefreshToken(SecureToken(refresh))),
-				},
-			};
-			let result = query_result.finish_with_result(Ok(token.into_value()));
-			Ok(vec![result])
+			#[cfg(feature = "auth")]
+			{
+				let query_result = QueryResultBuilder::started_now();
+				let token = {
+					iam::signup::signup(kvs, &mut *state.session.write().await, credentials.into())
+						.await
+						.map(sdk_token_from_core)
+						.map_err(surrealdb_core::err::anyhow_to_types_error)?
+				};
+				let result = query_result.finish_with_result(Ok(token.into_value()));
+				Ok(vec![result])
+			}
+			#[cfg(not(feature = "auth"))]
+			{
+				let _ = credentials;
+				Ok(auth_feature_disabled())
+			}
 		}
 		Command::Signin {
 			credentials,
 		} => {
-			let query_result = QueryResultBuilder::started_now();
-			let signin_data = {
-				iam::signin::signin(kvs, &mut *state.session.write().await, credentials.into())
-					.await
-					.map_err(surrealdb_core::err::anyhow_to_types_error)?
-			};
-			let token = match signin_data {
-				iam::Token::Access(token) => Token {
-					access: AccessToken(SecureToken(token)),
-					refresh: None,
-				},
-				iam::Token::WithRefresh {
-					access,
-					refresh,
-				} => Token {
-					access: AccessToken(SecureToken(access)),
-					refresh: Some(RefreshToken(SecureToken(refresh))),
-				},
-			};
-			let result = query_result.finish_with_result(Ok(token.into_value()));
-			Ok(vec![result])
+			#[cfg(feature = "auth")]
+			{
+				let query_result = QueryResultBuilder::started_now();
+				let token = {
+					iam::signin::signin(kvs, &mut *state.session.write().await, credentials.into())
+						.await
+						.map(sdk_token_from_core)
+						.map_err(surrealdb_core::err::anyhow_to_types_error)?
+				};
+				let result = query_result.finish_with_result(Ok(token.into_value()));
+				Ok(vec![result])
+			}
+			#[cfg(not(feature = "auth"))]
+			{
+				let _ = credentials;
+				Ok(auth_feature_disabled())
+			}
 		}
 		Command::Authenticate {
 			token,
 		} => {
-			let query_result = QueryResultBuilder::started_now();
-			// Extract the access token and check if this token supports refresh
-			let (access, with_refresh) = match &token {
-				iam::Token::Access(access) => (access, false),
-				iam::Token::WithRefresh {
-					access,
-					..
-				} => (access, true),
-			};
-			// Attempt to authenticate with the access token
-			let result = {
-				match iam::verify::token(kvs, &mut *state.session.write().await, access).await {
-					// Authentication successful - return the original token
-					Ok(_) => query_result.finish_with_result(Ok(token.into_value())),
-					Err(error) => {
-						// Automatic refresh token handling:
-						// If the access token is expired and we have a refresh token,
-						// automatically attempt to refresh and return new tokens.
-						if with_refresh && surrealdb_core::iam::is_expired_token_error(&error) {
-							let result =
-								match token.refresh(kvs, &mut *state.session.write().await).await {
+			#[cfg(feature = "auth")]
+			{
+				let query_result = QueryResultBuilder::started_now();
+				let with_refresh = token.refresh.is_some();
+				let access = token.access.as_insecure_token();
+				// Attempt to authenticate with the access token
+				let result = {
+					match iam::verify::token(kvs, &mut *state.session.write().await, access).await {
+						// Authentication successful - return the original token
+						Ok(_) => query_result.finish_with_result(Ok(token.into_value())),
+						Err(error) => {
+							// Automatic refresh token handling:
+							// If the access token is expired and we have a refresh token,
+							// automatically attempt to refresh and return new tokens.
+							if with_refresh && surrealdb_core::iam::is_expired_token_error(&error) {
+								let result = match refresh_auth_token(
+									token,
+									kvs,
+									&mut *state.session.write().await,
+								)
+								.await
+								{
 									Ok(token) => {
 										query_result.finish_with_result(Ok(token.into_value()))
 									}
@@ -699,30 +744,44 @@ async fn router(
 										TypesError::internal(error.to_string()),
 									)),
 								};
-							return Ok(vec![result]);
+								return Ok(vec![result]);
+							}
+							// If authentication failed and automatic refresh isn't applicable,
+							// return the authentication error
+							query_result
+								.finish_with_result(Err(TypesError::internal(error.to_string())))
 						}
-						// If authentication failed and automatic refresh isn't applicable,
-						// return the authentication error
-						query_result
-							.finish_with_result(Err(TypesError::internal(error.to_string())))
 					}
-				}
-			};
-			Ok(vec![result])
+				};
+				Ok(vec![result])
+			}
+			#[cfg(not(feature = "auth"))]
+			{
+				let _ = token;
+				Ok(auth_feature_disabled())
+			}
 		}
 		Command::Refresh {
 			token,
 		} => {
-			// Refresh command: Exchange a refresh token for new access and refresh tokens
-			let query_result = QueryResultBuilder::started_now();
-			let result = {
-				match token.refresh(kvs, &mut *state.session.write().await).await {
-					Ok(token) => query_result.finish_with_result(Ok(token.into_value())),
-					Err(error) => query_result
-						.finish_with_result(Err(TypesError::internal(error.to_string()))),
-				}
-			};
-			Ok(vec![result])
+			#[cfg(feature = "auth")]
+			{
+				// Refresh command: Exchange a refresh token for new access and refresh tokens
+				let query_result = QueryResultBuilder::started_now();
+				let result = {
+					match refresh_auth_token(token, kvs, &mut *state.session.write().await).await {
+						Ok(token) => query_result.finish_with_result(Ok(token.into_value())),
+						Err(error) => query_result
+							.finish_with_result(Err(TypesError::internal(error.to_string()))),
+					}
+				};
+				Ok(vec![result])
+			}
+			#[cfg(not(feature = "auth"))]
+			{
+				let _ = token;
+				Ok(auth_feature_disabled())
+			}
 		}
 		Command::Invalidate => {
 			let query_result = QueryResultBuilder::started_now();
@@ -752,15 +811,22 @@ async fn router(
 		Command::Revoke {
 			token,
 		} => {
-			// Revoke command: Explicitly invalidate a refresh token to prevent future use
-			let query_result = QueryResultBuilder::started_now();
-			let result = match token.revoke_refresh_token(kvs).await {
-				Ok(_) => query_result.finish_with_result(Ok(Value::None)),
-				Err(error) => {
-					query_result.finish_with_result(Err(TypesError::internal(error.to_string())))
-				}
-			};
-			Ok(vec![result])
+			#[cfg(feature = "auth")]
+			{
+				// Revoke command: Explicitly invalidate a refresh token to prevent future use
+				let query_result = QueryResultBuilder::started_now();
+				let result = match revoke_refresh_token(token, kvs).await {
+					Ok(_) => query_result.finish_with_result(Ok(Value::None)),
+					Err(error) => query_result
+						.finish_with_result(Err(TypesError::internal(error.to_string()))),
+				};
+				Ok(vec![result])
+			}
+			#[cfg(not(feature = "auth"))]
+			{
+				let _ = token;
+				Ok(auth_feature_disabled())
+			}
 		}
 		Command::Rollback {
 			txn,

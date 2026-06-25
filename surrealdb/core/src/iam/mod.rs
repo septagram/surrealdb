@@ -1,7 +1,9 @@
+#[cfg(feature = "auth")]
 use std::sync::Once;
 
 pub use entities::Level;
 use thiserror::Error;
+#[cfg(feature = "auth")]
 pub use token::Token;
 
 pub mod access;
@@ -11,17 +13,23 @@ pub mod check;
 pub mod clear;
 pub mod entities;
 pub(crate) mod file;
+#[cfg(feature = "auth")]
 pub mod issue;
 #[cfg(feature = "jwks")]
 pub mod jwks;
 pub mod reset;
+#[cfg(feature = "auth")]
 pub mod signin;
+#[cfg(feature = "auth")]
 pub mod signup;
+#[cfg(feature = "auth")]
 pub mod token;
+#[cfg(feature = "auth")]
 pub mod verify;
 
 pub use self::auth::*;
 pub use self::entities::*;
+#[cfg(feature = "auth")]
 use crate::catalog;
 
 #[derive(Error, Debug)]
@@ -38,6 +46,7 @@ pub enum Error {
 	},
 }
 
+#[cfg(feature = "auth")]
 fn algorithm_to_jwt_algorithm(alg: catalog::Algorithm) -> jsonwebtoken::Algorithm {
 	match alg {
 		catalog::Algorithm::Hs256 => jsonwebtoken::Algorithm::HS256,

@@ -14,8 +14,20 @@ categories.workspace = true
 license-file.workspace = true
 
 [features]
-# Public features
-default = ["protocol-ws", "rustls"]
+# Public features.
+#
+# customware/002 flips defaults to embedded-first: vanilla `cargo add surrealdb`
+# in this fork gets only `kv-mem` (no WebSocket client, no TLS, no graphql,
+# no auth). Anyone running this fork as a hosted server enables `server`
+# (and probably `protocol-ws,rustls` for client transports too).
+default = ["kv-mem"]
+# Pass-through for the surrealdb-core server umbrella — pulls auth, http,
+# jwks, graphql.
+server = ["surrealdb-core/server"]
+# Pass-through for the surrealdb-core auth feature — pulls jsonwebtoken
+# and the IAM credential pipeline. Embedded users who want DEFINE USER /
+# DEFINE ACCESS without the rest of `server` enable this directly.
+auth = ["surrealdb-core/auth"]
 allocator = ["surrealdb-core/allocator"]
 protocol-http = ["dep:reqwest", "surrealdb-types/reqwest"]
 protocol-ws = ["dep:tokio-tungstenite", "tokio/time"]
@@ -26,6 +38,8 @@ kv-tikv = ["surrealdb-core/kv-tikv", "tokio/time"]
 kv-surrealkv = ["surrealdb-core/kv-surrealkv", "tokio/time"]
 scripting = ["surrealdb-core/scripting"]
 http = ["surrealdb-core/http"]
+graphql = ["surrealdb-core/graphql"]
+surrealism = ["surrealdb-core/surrealism"]
 native-tls = [
     "dep:native-tls",
     "reqwest?/native-tls",
@@ -122,7 +136,6 @@ env_logger.workspace = true
 flate2.workspace = true
 parking_lot.workspace = true
 web-time.workspace = true
-pprof = { workspace = true, features = ["flamegraph", "criterion"] }
 radix_trie.workspace = true
 rand.workspace = true
 rayon.workspace = true
@@ -136,6 +149,11 @@ tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ulid = { workspace = true, features = ["serde"] }
 wiremock.workspace = true
+
+# pprof's profiler relies on Unix-only libc types and does not compile on
+# Windows. Mirror of the same gate in `surrealdb/core/Cargo.toml`.
+[target.'cfg(unix)'.dev-dependencies]
+pprof = { workspace = true, features = ["flamegraph", "criterion"] }
 
 [package.metadata.cargo-machete]
 # Unused in our source; only needed so the derive is built with sdk-path

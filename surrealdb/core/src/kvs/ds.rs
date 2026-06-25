@@ -3920,7 +3920,7 @@ impl crate::dbs::NodeEndpointResolver for CatalogNodeEndpointResolver {
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "auth"))]
 mod test {
 	use std::collections::BTreeMap;
 	use std::future::pending;
