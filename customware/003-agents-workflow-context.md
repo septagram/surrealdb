@@ -48,3 +48,9 @@ fork-local change that rides on `main` has a matching numbered
 
 - No separate code commits. The root `AGENTS.md` add lands in the same capture
   commit as this customware record.
+
+## v3.1.5 reapplication notes
+
+- `git apply --check customware/003-agents-workflow-context.patch` succeeded on
+  the `v3.1.5` customware chain.
+- Reapplied the root `AGENTS.md` file unchanged.
