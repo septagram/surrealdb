@@ -240,7 +240,7 @@ index 14ae2a85e..3214570f6 100644
  	match alg {
  		catalog::Algorithm::Hs256 => jsonwebtoken::Algorithm::HS256,
 diff --git a/surrealdb/core/src/kvs/ds.rs b/surrealdb/core/src/kvs/ds.rs
-index e4a108737..b1107a827 100644
+index 761a78972..765fd599a 100644
 --- a/surrealdb/core/src/kvs/ds.rs
 +++ b/surrealdb/core/src/kvs/ds.rs
 @@ -3920,7 +3920,7 @@ impl crate::dbs::NodeEndpointResolver for CatalogNodeEndpointResolver {
@@ -686,7 +686,7 @@ index 269684227..465d762e7 100644
  				session_id,
  			},
 diff --git a/surrealdb/src/engine/remote/ws/mod.rs b/surrealdb/src/engine/remote/ws/mod.rs
-index 6a4b0cf68..063875b38 100644
+index 6a4b0cf68..9285fc9a8 100644
 --- a/surrealdb/src/engine/remote/ws/mod.rs
 +++ b/surrealdb/src/engine/remote/ws/mod.rs
 @@ -17,7 +17,6 @@ use std::time::Duration;
@@ -705,17 +705,22 @@ index 6a4b0cf68..063875b38 100644
  use crate::types::{Array, HashMap, Notification, Number, SurrealValue, Value};
  use crate::{Connect, Error, Surreal};
  
-@@ -435,9 +435,7 @@ where
+@@ -435,11 +435,10 @@ where
  				token,
  				..
  			}) = pending.command
 -				&& let Token::WithRefresh {
 -					..
 -				} = &token && error
-+				&& token.refresh.is_some() && error
- 				.not_allowed_details()
- 				.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
+-				.not_allowed_details()
+-				.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
++				&& token.refresh.is_some()
++				&& error
++					.not_allowed_details()
++					.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
  			{
+ 				// Attempt automatic refresh
+ 				let refresh_request = RouterRequest {
 diff --git a/surrealdb/src/opt/auth.rs b/surrealdb/src/opt/auth.rs
 index 36f080f8e..86210ec04 100644
 --- a/surrealdb/src/opt/auth.rs

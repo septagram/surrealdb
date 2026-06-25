@@ -44,7 +44,7 @@ use crate::sql::statements::{
 use crate::sql::tokenizer::Tokenizer;
 use crate::sql::{
 	Algorithm, AssignOperator, Base, BinaryOperator, Block, Cond, Data, Dir, Explain, Expr, Fetch,
-	Fetchs, Field, Fields, Group, Groups, Idiom, IdGeneration, Index, Kind, Literal, Lookup, Mock,
+	Fetchs, Field, Fields, Group, Groups, IdGeneration, Idiom, Index, Kind, Literal, Lookup, Mock,
 	Output, Param, Part, Permission, Permissions, RecordIdKeyLit, RecordIdLit, Scoring, TableType,
 	TopLevelExpr, With,
 };

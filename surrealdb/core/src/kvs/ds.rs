@@ -74,10 +74,10 @@ use crate::kvs::LockType::*;
 use crate::kvs::TransactionType::*;
 use crate::kvs::cache::ds::DatastoreCache;
 use crate::kvs::clock::SystemClock;
+use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::ds::requirements::{
 	TransactionBuilderFactoryRequirements, TransactionBuilderRequirements,
 };
-use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::index::IndexBuilder;
 use crate::kvs::sequences::Sequences;
 use crate::kvs::slowlog::SlowLog;

@@ -435,9 +435,10 @@ where
 				token,
 				..
 			}) = pending.command
-				&& token.refresh.is_some() && error
-				.not_allowed_details()
-				.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
+				&& token.refresh.is_some()
+				&& error
+					.not_allowed_details()
+					.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
 			{
 				// Attempt automatic refresh
 				let refresh_request = RouterRequest {

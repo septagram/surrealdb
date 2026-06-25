@@ -192,8 +192,7 @@ impl InfoStructure for TableDefinition {
 /// without an explicit `id` field.
 ///
 /// - `Default`: existing random string ids, preserving upstream behavior.
-/// - `Sid`: Dorsid `Sid`, a monotonic i64 with per-table warm-up from stored
-///   keys.
+/// - `Sid`: Dorsid `Sid`, a monotonic i64 with per-table warm-up from stored keys.
 /// - `Rid`: Dorsid `Rid`, a stateless persistent i64 from CSPRNG entropy.
 #[revisioned(revision = 1)]
 #[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
