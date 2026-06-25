@@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
 use reblessive::tree::Stk;
 use surrealdb_types::ToSql;
 
-use crate::catalog::{LATEST_EDGE_VARIANT, RecordType};
+use crate::catalog::{IdGeneration, LATEST_EDGE_VARIANT, RecordType};
 use crate::ctx::{Context, FrozenContext};
 use crate::dbs::{Options, Statement};
 use crate::doc::{Document, Extras};
@@ -12,7 +12,7 @@ use crate::err::Error;
 use crate::expr::data::Data;
 use crate::expr::paths::{ID, IN, OUT};
 use crate::expr::{AssignOperator, FlowResultExt, Idiom, Part};
-use crate::val::{RecordId, Value};
+use crate::val::{RecordId, TableName, Value};
 
 impl Document {
 	/// Generate a record ID for CREATE, UPSERT, and UPDATE statements
@@ -24,7 +24,7 @@ impl Document {
 	///
 	/// The method ensures that all expressions are properly evaluated before
 	/// being used as record IDs.
-	pub(super) fn generate_record_id(&mut self) -> Result<()> {
+	pub(super) async fn generate_record_id(&mut self, ctx: &FrozenContext) -> Result<()> {
 		// Check if we need to generate a record id
 		if let Some(tb) = &self.r#gen {
 			// This is a CREATE, UPSERT, UPDATE, RELATE statement
@@ -38,13 +38,13 @@ impl Document {
 				match &self.input_data {
 					// There is a data clause so fetch a record id
 					Some(data) => match data.pick(ID.as_ref()) {
-						Value::None => RecordId::random_for_table(tb.clone()),
+						Value::None => self.generate_default_id(ctx, tb.clone()).await?,
 						// Generate a new id from the id field
 						id => id.generate(tb.clone(), false)?,
 						// Generate a new random table id
 					},
 					// There is no data clause so create a record id
-					None => RecordId::random_for_table(tb.clone()),
+					None => self.generate_default_id(ctx, tb.clone()).await?,
 				}
 			};
 			// The id field can not be a record range
@@ -59,6 +59,32 @@ impl Document {
 		}
 		//
 		Ok(())
+	}
+
+	/// Mint a default record id for the given table based on its
+	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
+	/// Dorsid `Sid` and `Rid` IDs; the `Default` arm preserves upstream
+	/// random-string behavior.
+	async fn generate_default_id(&self, ctx: &FrozenContext, tb: TableName) -> Result<RecordId> {
+		let tb_def = Arc::clone(self.doc_ctx.tb()?);
+		match tb_def.id_generation {
+			IdGeneration::Default => Ok(RecordId::random_for_table(tb)),
+			IdGeneration::Rid => {
+				let rid = dorsid::rid::next_persistent(None)
+					.map_err(|e| anyhow::anyhow!("dorsid Rid generation failed: {e}"))?;
+				Ok(RecordId::new(tb, rid.to_bits()))
+			}
+			IdGeneration::Sid => {
+				let registry = ctx.get_sid_registry().ok_or_else(|| {
+					anyhow::anyhow!(
+						"Sid generation requires a SidRegistry on the context; this is a bug"
+					)
+				})?;
+				let txn = ctx.tx();
+				let sid = registry.next_sid_warmed(&txn, &tb_def).await?;
+				Ok(RecordId::new(tb, sid.to_bits()))
+			}
+		}
 	}
 
 	/// Clears all of the content of this document.

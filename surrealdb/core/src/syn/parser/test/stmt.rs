@@ -44,9 +44,9 @@ use crate::sql::statements::{
 use crate::sql::tokenizer::Tokenizer;
 use crate::sql::{
 	Algorithm, AssignOperator, Base, BinaryOperator, Block, Cond, Data, Dir, Explain, Expr, Fetch,
-	Fetchs, Field, Fields, Group, Groups, Idiom, Index, Kind, Literal, Lookup, Mock, Output, Param,
-	Part, Permission, Permissions, RecordIdKeyLit, RecordIdLit, Scoring, TableType, TopLevelExpr,
-	With,
+	Fetchs, Field, Fields, Group, Groups, Idiom, IdGeneration, Index, Kind, Literal, Lookup, Mock,
+	Output, Param, Part, Permission, Permissions, RecordIdKeyLit, RecordIdLit, Scoring, TableType,
+	TopLevelExpr, With,
 };
 use crate::syn;
 use crate::syn::parser::ParserSettings;
@@ -1607,6 +1607,7 @@ fn parse_define_table() {
 			comment: Expr::Literal(Literal::None),
 
 			table_type: TableType::Normal,
+			id_generation: IdGeneration::default(),
 			graphql_alias: None,
 			graphql_deprecated: None,
 		})))

@@ -22,7 +22,7 @@ impl Document {
 			return self.insert_update(stk, ctx, opt, stm).await;
 		}
 		// Generate a record id up front
-		self.generate_record_id()?;
+		self.generate_record_id(ctx).await?;
 		// ON DUPLICATE KEY UPDATE makes a conflict retryable as an update
 		let retryable = stm.update().is_some();
 		// Save point so a failed create attempt can be rolled back

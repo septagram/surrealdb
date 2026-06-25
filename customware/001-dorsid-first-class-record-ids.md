@@ -180,3 +180,16 @@ d85c5305 Parse DEFINE TABLE ... ID [default|sid|rid]
 2331a664 Warm the Sid generator floor from stored record keys
 95e4ea8e Cross-mode integration tests and tidy
 ```
+
+## v3.1.5 reapplication notes
+
+- Reimplemented against upstream `v3.1.5` instead of applying the old patch
+  byte-for-byte.
+- `TableDefinition` was already at revision 2 in `v3.1.5` for GraphQL
+  alias/deprecation fields, so `id_generation` now starts at catalog revision 3.
+- The lazy Sid warm-up path now adapts to the `ScanResult` return type from
+  `Transaction::scanr` and records scan metrics before returning raw keys.
+- The document pipeline keeps the `v3.1.5` permission/retry ordering; only the
+  default record-id minting hook became async for Dorsid Sid warm-up.
+- Verified the reimplementation with
+  `cargo check -p surrealdb-core --no-default-features --features kv-mem`.

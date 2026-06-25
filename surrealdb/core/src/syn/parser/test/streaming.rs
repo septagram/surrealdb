@@ -34,9 +34,10 @@ use crate::sql::statements::{
 use crate::sql::tokenizer::Tokenizer;
 use crate::sql::{
 	Algorithm, AssignOperator, Base, BinaryOperator, Block, Cond, Data, Dir, Explain, Expr, Fetch,
-	Fetchs, Field, Fields, Function, FunctionCall, Group, Groups, Idiom, Index, Kind, Limit,
-	Literal, Lookup, Mock, Order, Output, Param, Part, Permission, Permissions, RecordIdKeyLit,
-	RecordIdLit, Scoring, Script, Split, Splits, Start, TableType, TopLevelExpr, With,
+	Fetchs, Field, Fields, Function, FunctionCall, Group, Groups, Idiom, IdGeneration, Index, Kind,
+	Limit, Literal, Lookup, Mock, Order, Output, Param, Part, Permission, Permissions,
+	RecordIdKeyLit, RecordIdLit, Scoring, Script, Split, Splits, Start, TableType, TopLevelExpr,
+	With,
 };
 use crate::syn::parser::StatementStream;
 use crate::types::{PublicDatetime, PublicDuration, PublicUuid};
@@ -291,6 +292,7 @@ fn statements() -> Vec<TopLevelExpr> {
 			comment: Expr::Literal(Literal::None),
 
 			table_type: TableType::Normal,
+			id_generation: IdGeneration::default(),
 			graphql_alias: None,
 			graphql_deprecated: None,
 		})))),

@@ -113,7 +113,7 @@ impl Document {
 		// Set the specified record content
 		self.process_record_data(stk, ctx, opt).await?;
 		// Generate a new record id if necessary
-		self.generate_record_id()?;
+		self.generate_record_id(ctx).await?;
 		// Ensure all special fields are valid
 		self.check_data_fields()?;
 		// Set the default record field values

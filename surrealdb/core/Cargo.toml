@@ -76,6 +76,7 @@ surrealml-core = { workspace = true, optional = true }
 affinitypool = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 dmp.workspace = true
+dorsid.workspace = true
 indxdb = { workspace = true, optional = true }
 js = { workspace = true, features = [
     "array-buffer",
@@ -240,7 +241,6 @@ criterion = { workspace = true, features = ["async_tokio"] }
 env_logger.workspace = true
 flate2.workspace = true
 paste.workspace = true
-pprof = { workspace = true, features = ["flamegraph", "criterion"] }
 rstest.workspace = true
 serial_test.workspace = true
 temp-dir.workspace = true
@@ -250,6 +250,12 @@ tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }
 tokio-util.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 wiremock.workspace = true
+
+# pprof's profiler relies on Unix-only libc types (pthread_t, siginfo_t,
+# ucontext_t) and does not compile on Windows. Used here only for criterion
+# benchmark flamegraphs.
+[target.'cfg(unix)'.dev-dependencies]
+pprof = { workspace = true, features = ["flamegraph", "criterion"] }
 
 [package.metadata.cargo-machete]
 # md-5 crate is imported as md5::, regex-syntax is optional (tied to arbitrary feature)

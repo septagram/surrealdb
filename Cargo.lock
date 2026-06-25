@@ -2091,6 +2091,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "diceware-ordinal"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2213,6 +2220,16 @@ name = "doc-comment"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
+
+[[package]]
+name = "dorsid"
+version = "0.1.0"
+dependencies = [
+ "diceware-ordinal",
+ "getrandom 0.4.2",
+ "thiserror 2.0.18",
+ "time",
+]
 
 [[package]]
 name = "dtoa"
@@ -7147,6 +7164,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "dmp",
+ "dorsid",
  "env_logger",
  "ext-sort",
  "fastnum",
