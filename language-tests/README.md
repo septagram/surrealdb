@@ -135,6 +135,20 @@ measurement-time = "20s" # target total measurement window
   need a clean slate each time, otherwise state accumulates across iterations and
   the workload drifts.
 
+**Dataset sharing.** Read-only (`rebuild = false`) benches that resolve to the
+same dataset — same effective import chain, capabilities, backend, and target
+namespace/database — are grouped, and their dataset is built and imported **once**
+then reused across the whole group (the big `records-100000` set, for example, is
+imported once for the ~26 benches that share it instead of once each). Only the
+timed `execute` is measured, so this changes wall-clock only, not the reported
+numbers. Dataset-matrix variants (`[unindexed]` vs `[indexed]`) have different
+import chains, so they form separate groups with separate datastores.
+
+> ⚠️ Because grouped benches share one live datastore, a `rebuild = false` bench
+> whose query **mutates** state (CREATE/UPDATE/DELETE/…) would corrupt the results
+> of every other bench in its group. Any bench that writes data **must** set
+> `rebuild = true`.
+
 The crud-bench ports live under [tests/bench/](tests/bench) in the `scans/`,
 `batches/`, and `util/` folders. The read-only scan ports set `rebuild = false`
 and import a shared dataset from `util/` (100k rows mirroring

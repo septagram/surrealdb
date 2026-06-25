@@ -26,7 +26,10 @@ use crate::tests::schema::{BoolOr, NewPlannerStrategyConfig, TestConfig};
 use crate::tests::{CaseSet, RunSetBuilder, TestRun};
 
 struct BenchRunConfig {
-	cache_id: String,
+	/// Key grouping runs whose populated datastore is byte-for-byte
+	/// interchangeable, so the dataset is imported once and reused across them.
+	/// Computed once per run (after matrix expansion) by [`calc_group_key`].
+	group_key: String,
 	/// Short label of the dataset variant this run uses (from `[bench].datasets`),
 	/// or `None` when the bench runs once against its `[env].imports`.
 	variant: Option<String>,
@@ -44,31 +47,70 @@ impl RunConfig for BenchRunConfig {
 	}
 }
 
-fn calc_cache_id(case: &CaseImports) -> String {
-	static BYTES: &[u8] = b"0123456789abcdef";
-	let mut hasher = Sha256::new();
-	for i in case.imports.iter() {
-		hasher.update(i.origin.path.as_bytes());
-		let Ok(epoch) = i.origin.modified.duration_since(SystemTime::UNIX_EPOCH) else {
-			continue;
-		};
-		hasher.update(epoch.as_secs().to_le_bytes());
-		hasher.update(epoch.subsec_nanos().to_le_bytes());
+static HEX: &[u8] = b"0123456789abcdef";
+
+/// The core capabilities baked into the datastore at build time for a test
+/// config. Shared by [`builder_from_config`] and [`calc_group_key`] so the group
+/// key reflects exactly what the engine is constructed with.
+fn resolve_capabilities(config: &TestConfig) -> Capabilities {
+	match &config.env.capabilities {
+		BoolOr::Bool(true) => Capabilities::all().with_experimental(Targets::All),
+		BoolOr::Bool(false) => Capabilities::none(),
+		BoolOr::Value(x) => util::core_capabilities_from_test_config(x),
 	}
+}
+
+/// Key identifying datastores that are byte-for-byte interchangeable, so a single
+/// populated datastore can be built once and shared across every read-only bench
+/// that maps to the same key (see the grouping in [`run`]). Two benches may share
+/// a datastore iff their effective import chain, built capabilities, backend, and
+/// target namespace + database all match — everything that determines the
+/// populated keyspace and the engine config.
+///
+/// Deliberately excluded: auth, planner strategy, dialect, and the bench's own
+/// query. These only parameterize the per-bench execute session and statement
+/// (built fresh per bench against the shared store), never where imported data
+/// lands — imports always run as `Session::owner()` retargeted to `(ns, db)`.
+fn calc_group_key(
+	chain: &[Arc<crate::tests::case::TestCase>],
+	parsed: &TestConfig,
+	backend: Backend,
+) -> String {
+	let mut hasher = Sha256::new();
+	// Effective import chain: each import's path + mtime, in order.
+	for i in chain.iter() {
+		hasher.update(i.origin.path.as_bytes());
+		if let Ok(epoch) = i.origin.modified.duration_since(SystemTime::UNIX_EPOCH) {
+			hasher.update(epoch.as_secs().to_le_bytes());
+			hasher.update(epoch.subsec_nanos().to_le_bytes());
+		}
+	}
+	// The capabilities actually baked into the datastore (derived `Debug` is
+	// stable), so benches built with different capabilities never share a store.
+	hasher.update(format!("{:?}", resolve_capabilities(parsed)).as_bytes());
+	// Backend engine/layout — never share a populated store across backends.
+	let backend_tag = match backend {
+		Backend::Memory => "mem",
+		Backend::RocksDb => "rocksdb",
+		Backend::SurrealKv => "surrealkv",
+		Backend::TikV => "tikv",
+	};
+	hasher.update(backend_tag.as_bytes());
+	// Target namespace + database: imports physically land under exactly (ns, db).
+	hasher.update(parsed.env.namespace().unwrap_or("").as_bytes());
+	hasher.update(b"\x00");
+	hasher.update(parsed.env.database().unwrap_or("").as_bytes());
+
 	let bytes = hasher.finalize();
 	let mut res = String::new();
 	for b in bytes.iter() {
-		res.push(BYTES[(b & 0b1111) as usize] as char);
-		res.push(BYTES[(b >> 4) as usize] as char);
+		res.push(HEX[(b & 0b1111) as usize] as char);
+		res.push(HEX[(b >> 4) as usize] as char);
 	}
 	res
 }
 
 struct BenchConfig {
-	// Placeholder for the deferred dataset-cache work; scoped allow so the rest
-	// of the module stays lint-checked for dead code.
-	#[allow(dead_code)]
-	ds_cache: String,
 	backend: Backend,
 	/// Temp directory under which file-backed datastores (rocksdb/surrealkv) are
 	/// built; `None` for the in-memory backend. Removed when `run()` returns.
@@ -115,7 +157,6 @@ struct CmdConfig<'a> {
 	filter: Option<&'a String>,
 	dataset: Option<&'a String>,
 	backend: Backend,
-	ds_cache: &'a String,
 	save: bool,
 	store: StoreConfig<'a>,
 }
@@ -127,7 +168,6 @@ impl<'a> CmdConfig<'a> {
 		let filter = current.get_one::<String>("filter");
 		let dataset = current.get_one::<String>("dataset");
 		let backend = *current.get_one::<Backend>("backend").unwrap();
-		let ds_cache = current.get_one::<String>("ds-cache").unwrap();
 		let save = current.get_flag("save");
 
 		Self {
@@ -135,7 +175,6 @@ impl<'a> CmdConfig<'a> {
 			filter,
 			dataset,
 			backend,
-			ds_cache,
 			save,
 			store: StoreConfig::from_matches(parent),
 		}
@@ -177,7 +216,6 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 	let _bench_root_cleanup = bench_root.clone().map(CleanupDir);
 
 	let config = BenchConfig {
-		ds_cache: cfg.ds_cache.clone(),
 		backend: cfg.backend,
 		bench_root,
 		new_planner: NewPlannerStrategyConfig::BestEffortRo,
@@ -224,9 +262,10 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 		})
 		// One config per bench; dataset-matrix expansion happens after build()
 		// (below) where the CaseSet is available for resolving import chains.
-		.with_expander(|x| {
+		.with_expander(|_| {
 			vec![BenchRunConfig {
-				cache_id: calc_cache_id(x),
+				// Computed after matrix expansion (needs the effective chain).
+				group_key: String::new(),
 				variant: None,
 				imports: None,
 			}]
@@ -265,7 +304,8 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 				id: TestRunId::new(0),
 				case: run.case.clone(),
 				config: BenchRunConfig {
-					cache_id: run.config.cache_id.clone(),
+					// Computed after matrix expansion (needs the effective chain).
+					group_key: String::new(),
 					variant: Some(name.clone()),
 					imports: Some(chain),
 				},
@@ -279,31 +319,152 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 		run.id = TestRunId::new(idx);
 	}
 
+	// Compute each run's group key from its EFFECTIVE import chain (the per-variant
+	// chain when set, else the case's own imports) plus the build-affecting env, so
+	// matrix variants with different chains land in distinct groups.
+	for run in runs.iter_mut() {
+		let chain = run.config.imports.as_deref().unwrap_or(&run.case.imports);
+		run.config.group_key = calc_group_key(chain, &run.case.test.config.parsed, cfg.backend);
+	}
+
 	if runs.is_empty() {
 		println!("No benchmarks found, exiting");
 		return Ok(());
 	}
 
-	let mut measurements = Vec::new();
-	for i in runs.into_iter() {
-		// `rebuild = true` benches rebuild the datastore and re-run their imports
-		// every iteration. On a file backend that means re-importing the dataset
-		// to disk each time, which is impractically slow — so restrict mutating
-		// benches to the in-memory backend and skip them elsewhere.
-		if cfg.backend != Backend::Memory && i.case.test.config.parsed.bench.rebuild {
+	// Split runs into read-only (groupable) and mutating (`rebuild = true`). Only
+	// `execute` is timed, so a read-only bench's dataset can be imported once and
+	// shared; mutating benches rebuild a fresh datastore per iteration.
+	let mut readonly = Vec::new();
+	let mut rebuild = Vec::new();
+	for run in runs.into_iter() {
+		if run.case.test.config.parsed.bench.rebuild {
+			rebuild.push(run);
+		} else {
+			readonly.push(run);
+		}
+	}
+
+	// Order read-only runs so members of a group are contiguous, in the order each
+	// group's first member was discovered (a stable sort preserves discovery order
+	// within a group). This keeps the printed/stored order close to the original
+	// path order rather than the opaque hash, while letting one populated datastore
+	// serve a whole contiguous run of benches.
+	let mut first_seen = std::collections::HashMap::new();
+	for (idx, run) in readonly.iter().enumerate() {
+		first_seen.entry(run.config.group_key.clone()).or_insert(idx);
+	}
+	readonly.sort_by_key(|run| first_seen[&run.config.group_key]);
+
+	let mut measurements: Vec<(String, MeasurementData, Option<ComparisonData>)> = Vec::new();
+
+	// Read-only benches: build + populate + compact one datastore per group, then
+	// run every member against it. The whole group runs on a single runtime so the
+	// shared datastore is built and used on the same runtime.
+	let mut idx = 0;
+	while idx < readonly.len() {
+		let mut end = idx + 1;
+		while end < readonly.len()
+			&& readonly[end].config.group_key == readonly[idx].config.group_key
+		{
+			end += 1;
+		}
+		let group = &readonly[idx..end];
+
+		// Fetch baselines on this (the store's) runtime before handing the group to
+		// its own runtime. Baseline is keyed on the run name, which includes the
+		// dataset-matrix variant, so variants keep separate baseline series.
+		let mut baselines = Vec::with_capacity(group.len());
+		for run in group {
+			baselines.push(
+				store
+					.fetch_latest(&run.name(), cfg.backend)
+					.await
+					.context("Could not fetch latest measurement data")?,
+			);
+		}
+
+		if group.len() > 1 {
+			println!(
+				"Importing shared dataset for {} benches (e.g. {})",
+				group.len(),
+				group[0].name()
+			);
+		}
+
+		let outcome = thread::scope(|scope| {
+			scope
+				.spawn(|| {
+					tokio::runtime::Builder::new_multi_thread()
+						.enable_all()
+						.build()
+						.unwrap()
+						.block_on(run_group(group, &config, baselines))
+				})
+				.join()
+		})
+		.map_err(|e| {
+			if let Some(x) = e.downcast_ref::<String>() {
+				anyhow!("Measurement thread paniced: {x}")
+			} else {
+				anyhow!("Measurement thread paniced")
+			}
+		})??;
+
+		match outcome {
+			GroupOutcome::ImportFailed(imp_fail) => {
+				println!(
+					"Error, import `{}` returned an error: {}",
+					imp_fail.path, imp_fail.message
+				);
+			}
+			GroupOutcome::Ran(results) => {
+				// Persist each group's results as it finishes, so a run killed partway
+				// (job timeout, runner eviction, panic) keeps every completed group
+				// instead of discarding the lot. Non-fatal: a transient store error
+				// must not sink an otherwise-good run.
+				for (run, (measurement, compare)) in group.iter().zip(results) {
+					if cfg.save
+						&& let Err(e) = store
+							.add(BenchMarkRun {
+								measurement: measurement.clone(),
+								path: run.name(),
+								backend: cfg.backend,
+							})
+							.await
+					{
+						eprintln!("Warning: could not store measurement for {}: {e:#}", run.name());
+					}
+					measurements.push((run.name(), measurement, compare));
+				}
+			}
+		}
+
+		// The group's datastore has dropped (run_group returned), so reclaim the
+		// file-backed store dir(s) before the next group. Only one group is live at
+		// a time, so wiping the whole root here is safe.
+		if let Some(root) = config.bench_root.as_deref() {
+			let _ = std::fs::remove_dir_all(root);
+			let _ = std::fs::create_dir_all(root);
+		}
+
+		idx = end;
+	}
+
+	// Mutating benches: rebuild a fresh datastore each iteration (never grouped).
+	// On a file backend that re-imports the dataset to disk every iteration, which
+	// is impractically slow, so they are restricted to the in-memory backend.
+	for run in rebuild.into_iter() {
+		if cfg.backend != Backend::Memory {
 			println!(
 				"Skipping {} (`rebuild = true` benches only run on the `mem` backend)",
-				i.name()
+				run.name()
 			);
 			continue;
 		}
 
-		// Key the baseline on the run name, not just the file path, so the two
-		// variants of a dataset-matrix bench (`[unindexed]`/`[indexed]`) don't
-		// share — and overwrite — one baseline slot. For non-matrix benches the
-		// name is just the path, so this is unchanged.
 		let baseline = store
-			.fetch_latest(&i.name(), cfg.backend)
+			.fetch_latest(&run.name(), cfg.backend)
 			.await
 			.context("Could not fetch latest measurement data")?;
 
@@ -314,7 +475,7 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 						.enable_all()
 						.build()
 						.unwrap()
-						.block_on(run_bench(&i, &config, baseline))
+						.block_on(run_bench(&run, &config, baseline, None))
 				})
 				.join()
 		})
@@ -340,39 +501,29 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 				);
 			}
 			BenchRunResult::Ok(measurement, compare) => {
-				// Persist each result the moment its bench finishes, not in a trailing
-				// pass over the whole suite, so a run killed partway (job timeout,
-				// runner eviction, panic) keeps every completed bench instead of
-				// discarding the lot. The store is a per-bench time series, so a
-				// partial run is well-formed. Non-fatal: a transient store error must
-				// not sink an otherwise-good run.
-				if cfg.save {
-					if let Err(e) = store
+				if cfg.save
+					&& let Err(e) = store
 						.add(BenchMarkRun {
 							measurement: measurement.clone(),
-							path: i.name(),
+							path: run.name(),
 							backend: cfg.backend,
 						})
 						.await
-					{
-						eprintln!("Warning: could not store measurement for {}: {e:#}", i.name());
-					}
+				{
+					eprintln!("Warning: could not store measurement for {}: {e:#}", run.name());
 				}
-				measurements.push((i, measurement, compare));
+				measurements.push((run.name(), measurement, compare));
 			}
 		}
 
-		// The bench's datastore has dropped (run_bench returned), so reclaim the
-		// file-backed store dir(s) before the next bench rather than letting them
-		// accumulate until the whole tree is removed at the end of the run.
 		if let Some(root) = config.bench_root.as_deref() {
 			let _ = std::fs::remove_dir_all(root);
 			let _ = std::fs::create_dir_all(root);
 		}
 	}
 
-	for (i, m, compare) in &measurements {
-		println!(" - {}", i.name());
+	for (name, m, compare) in &measurements {
+		println!(" - {}", name);
 
 		if let Some(compare) = compare {
 			let signficant = compare.p_value < DEFAULT_SIGNIFICANCE_THRESHOLD;
@@ -496,11 +647,7 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 }
 
 pub fn builder_from_config(config: &TestConfig) -> Builder {
-	let capabilities = match &config.env.capabilities {
-		BoolOr::Bool(true) => Capabilities::all().with_experimental(Targets::All),
-		BoolOr::Bool(false) => Capabilities::none(),
-		BoolOr::Value(x) => util::core_capabilities_from_test_config(x),
-	};
+	let capabilities = resolve_capabilities(config);
 
 	let builder = Datastore::builder();
 	let builder = if capabilities.allows_live_query_notifications() {
@@ -646,41 +793,108 @@ fn dataset_seed() -> u64 {
 	surrealdb_core::cnf::RAND_SEED.unwrap_or(DEFAULT_DATASET_SEED)
 }
 
-/// Builds a fresh in-memory datastore, runs the bench's imports, and performs
-/// index compaction so the datastore is ready to execute the timed statement.
+/// Builds a fresh datastore, reseeds the engine RNG, runs the (effective) import
+/// chain, and performs index compaction — leaving a populated datastore ready to
+/// execute timed read-only statements.
 ///
 /// Returns `Ok(Err(..))` when an import fails so the caller can surface it as an
-/// [`BenchRunResult::Import`].
-async fn prepare(
+/// [`BenchRunResult::Import`] / [`GroupOutcome::ImportFailed`].
+///
+/// Shared by the grouped read-only path (built once per dataset group, then reused
+/// across the group's benches) and, via [`prepare`], the per-iteration rebuild
+/// path. The reseed makes generated data identical on every build and independent
+/// of benchmark order, so nightly comparisons reflect code changes rather than the
+/// luck of the dataset draw.
+async fn build_and_populate(
 	run: &TestRun<BenchRunConfig>,
 	config: &BenchConfig,
 	token: &tokio_util::sync::CancellationToken,
-) -> Result<std::result::Result<(Arc<Datastore>, Session), ImportFailure>> {
+) -> Result<std::result::Result<Arc<Datastore>, ImportFailure>> {
 	let dbs = Arc::new(
 		builder_from_config(&run.case.test.config.parsed)
 			.build_with_path(&datastore_conn(config))
 			.await?,
 	);
 
+	// The import session only targets the namespace/database — data lands as owner
+	// (see `run_imports_list`), so it is independent of the bench's own auth. The
+	// timed statement gets its own session per bench.
 	let session =
 		util::session_from_test_config(&run.case.test.config.parsed, config.new_planner.into());
 
-	// Reseed the engine RNG before populating the dataset so generated data is
-	// identical on every build and independent of benchmark order, making
-	// nightly run-to-run comparisons reflect code changes rather than the luck
-	// of the dataset draw.
 	surrealdb_core::rnd::reseed(dataset_seed());
 
 	// Use the per-variant dataset import chain (from `[bench].datasets`) when one
 	// was selected, otherwise fall back to the bench's own resolved imports.
 	let imports = run.config.imports.as_deref().unwrap_or(&run.case.imports);
-	if let Some(e) = util::run_imports_list(imports, session.clone(), &dbs).await? {
+	if let Some(e) = util::run_imports_list(imports, session, &dbs).await? {
 		return Ok(Err(e));
 	}
 
 	Datastore::index_compaction(dbs.clone(), Duration::from_secs(1), token.clone()).await?;
 
-	Ok(Ok((dbs, session)))
+	Ok(Ok(dbs))
+}
+
+/// Builds a populated datastore plus the per-bench execute session. Used by the
+/// `rebuild = true` path, which rebuilds a fresh datastore every iteration.
+async fn prepare(
+	run: &TestRun<BenchRunConfig>,
+	config: &BenchConfig,
+	token: &tokio_util::sync::CancellationToken,
+) -> Result<std::result::Result<(Arc<Datastore>, Session), ImportFailure>> {
+	match build_and_populate(run, config, token).await? {
+		Err(e) => Ok(Err(e)),
+		Ok(dbs) => {
+			let session = util::session_from_test_config(
+				&run.case.test.config.parsed,
+				config.new_planner.into(),
+			);
+			Ok(Ok((dbs, session)))
+		}
+	}
+}
+
+/// Outcome of running one dataset group's read-only benches against a shared,
+/// already-populated datastore (see [`run_group`]).
+#[allow(clippy::large_enum_variant)]
+enum GroupOutcome {
+	/// Building/populating the group's shared dataset failed.
+	ImportFailed(ImportFailure),
+	/// Per-member `(measurement, comparison)`, in group order.
+	Ran(Vec<(MeasurementData, Option<ComparisonData>)>),
+}
+
+/// Builds the group's dataset once, then runs every read-only bench in the group
+/// against the one shared datastore. `baselines` is per-member, in group order.
+///
+/// All members share the same `group_key`, so they resolve to an identical
+/// populated datastore; the per-bench session and statement are still built
+/// individually against the shared `dbs`.
+async fn run_group(
+	group: &[TestRun<BenchRunConfig>],
+	config: &BenchConfig,
+	baselines: Vec<Option<MeasurementData>>,
+) -> Result<GroupOutcome> {
+	let token = tokio_util::sync::CancellationToken::new();
+
+	// Any member is a valid template for building the (identical) dataset.
+	let dbs = match build_and_populate(&group[0], config, &token).await? {
+		Ok(dbs) => dbs,
+		Err(e) => return Ok(GroupOutcome::ImportFailed(e)),
+	};
+
+	let mut results = Vec::with_capacity(group.len());
+	for (run, baseline) in group.iter().zip(baselines) {
+		match run_bench(run, config, baseline, Some(dbs.clone())).await? {
+			BenchRunResult::Ok(measurement, compare) => results.push((measurement, compare)),
+			// A grouped read-only bench imports nothing of its own, so it cannot
+			// surface an import failure; treat one defensively as a group failure.
+			BenchRunResult::Import(e) => return Ok(GroupOutcome::ImportFailed(e)),
+		}
+	}
+
+	Ok(GroupOutcome::Ran(results))
 }
 
 /// Emits a sentinel line on stderr delimiting the measured region of a bench,
@@ -697,6 +911,7 @@ async fn run_bench(
 	run: &TestRun<BenchRunConfig>,
 	config: &BenchConfig,
 	baseline: Option<MeasurementData>,
+	shared_dbs: Option<Arc<Datastore>>,
 ) -> Result<BenchRunResult> {
 	println!("Running bench {}", run.name());
 	println!("Warming up");
@@ -706,21 +921,33 @@ async fn run_bench(
 	let warmup_time = bench_config.warmup.0;
 	let token = tokio_util::sync::CancellationToken::new();
 
-	// When the bench is read-only (`rebuild = false`, the default) the datastore
-	// is built and populated once, then reused across every warmup and measured
-	// iteration so we time only the statement against a stable dataset. Mutating
-	// benches (`rebuild = true`) instead get a fresh datastore per iteration.
-	let shared = if bench_config.rebuild {
-		None
-	} else {
-		match prepare(run, config, &token).await? {
-			Ok((dbs, session)) => {
-				let statement = BenchStatement::prepare(run, &dbs, &session).await?;
-				Some((dbs, session, statement))
-			}
-			Err(e) => return Ok(BenchRunResult::Import(e)),
+	// Read-only benches (`rebuild = false`, the default) run against the group's
+	// already-populated datastore (`shared_dbs`), reused across every warmup and
+	// measured iteration so we time only the statement against a stable dataset.
+	// Mutating benches (`rebuild = true`) get `shared_dbs = None` and rebuild a
+	// fresh datastore per iteration below.
+	//
+	// IMPORTANT: a read-only bench must NOT mutate the shared datastore — its query
+	// runs against the same store as every other bench in its group, so a write
+	// would corrupt their results. Any bench whose query creates/updates/deletes
+	// data MUST set `rebuild = true`.
+	let shared = match shared_dbs {
+		Some(dbs) => {
+			let session = util::session_from_test_config(
+				&run.case.test.config.parsed,
+				config.new_planner.into(),
+			);
+			let statement = BenchStatement::prepare(run, &dbs, &session).await?;
+			Some((dbs, session, statement))
 		}
+		None => None,
 	};
+
+	// Reseed before timing so any `rand::*` drawn in the bench query (e.g. the
+	// vector-KNN query vector) is deterministic and independent of how many benches
+	// shared this datastore before it. (The rebuild path reseeds again inside each
+	// per-iteration `prepare`; harmless.)
+	surrealdb_core::rnd::reseed(dataset_seed());
 
 	let before_warmup = Instant::now();
 	let mut count = 0usize;

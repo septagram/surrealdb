@@ -92,6 +92,12 @@ pub async fn run_imports<T: RunConfig>(
 /// the session's namespace/database. Used by [`run_imports`] (which forwards the
 /// test's resolved imports) and by the bench runner, which may substitute a
 /// per-variant import chain (see `[bench].datasets`).
+///
+/// Imports always run as `Session::owner()` retargeted (via `process_use`) to the
+/// session's `(ns, db)`, so the populated data depends only on `(ns, db)` and the
+/// import chain — never on the test's `[env].auth`. This is what lets the bench
+/// runner share one populated datastore across read-only benches that differ only
+/// in auth (see `calc_group_key`).
 pub async fn run_imports_list(
 	imports: &[std::sync::Arc<crate::tests::case::TestCase>],
 	mut session: Session,

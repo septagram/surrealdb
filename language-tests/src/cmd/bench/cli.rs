@@ -21,9 +21,6 @@ pub fn cmd() -> Command {
 				arg!(--backend <BACKEND> "Specify the storage backend to use for the upgrade test")
 					.value_parser(EnumValueParser::<Backend>::new()).default_value("mem")
 			)
-			.arg(
-				arg!(--"ds-cache" <DIR> "Specify where to store the dataset cache").default_value("./ds_cache")
-			)
             .arg(arg!(--path <PATH> "The path to tests directory").default_value("./tests"))
 			.arg(arg!(-s --save "Save the result to the comparison datastore"))
 		)
