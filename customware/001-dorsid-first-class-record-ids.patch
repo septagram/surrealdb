@@ -1,0 +1,1446 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 4de9ef926..d3cb0025b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2086,6 +2086,13 @@ dependencies = [
+  "zeroize",
+ ]
+ 
++[[package]]
++name = "diceware-ordinal"
++version = "0.1.0"
++dependencies = [
++ "thiserror 2.0.18",
++]
++
+ [[package]]
+ name = "difflib"
+ version = "0.4.0"
+@@ -2152,6 +2159,16 @@ version = "0.3.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
+ 
++[[package]]
++name = "dorsid"
++version = "0.1.0"
++dependencies = [
++ "diceware-ordinal",
++ "getrandom 0.4.2",
++ "thiserror 2.0.18",
++ "time",
++]
++
+ [[package]]
+ name = "dtoa"
+ version = "1.0.11"
+@@ -2847,11 +2864,24 @@ dependencies = [
+  "cfg-if",
+  "js-sys",
+  "libc",
+- "r-efi",
++ "r-efi 5.3.0",
+  "wasip2",
+  "wasm-bindgen",
+ ]
+ 
++[[package]]
++name = "getrandom"
++version = "0.4.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
++dependencies = [
++ "cfg-if",
++ "libc",
++ "r-efi 6.0.0",
++ "wasip2",
++ "wasip3",
++]
++
+ [[package]]
+ name = "gimli"
+ version = "0.32.3"
+@@ -5463,6 +5493,12 @@ version = "5.3.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+ 
++[[package]]
++name = "r-efi"
++version = "6.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
++
+ [[package]]
+ name = "radium"
+ version = "0.7.0"
+@@ -7072,6 +7108,7 @@ dependencies = [
+  "dashmap",
+  "deunicode",
+  "dmp",
++ "dorsid",
+  "env_logger",
+  "ext-sort",
+  "fastnum",
+@@ -8586,6 +8623,15 @@ dependencies = [
+  "wit-bindgen",
+ ]
+ 
++[[package]]
++name = "wasip3"
++version = "0.4.0+wasi-0.3.0-rc-2026-01-06"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5428f8bf88ea5ddc08faddef2ac4a67e390b88186c703ce6dbd955e1c145aca5"
++dependencies = [
++ "wit-bindgen",
++]
++
+ [[package]]
+ name = "wasm-bindgen"
+ version = "0.2.108"
+diff --git a/Cargo.toml b/Cargo.toml
+index 29b8dace5..fee88fcb9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -64,6 +64,14 @@ surrealism-runtime = { version = "0.2", path = "surrealism/runtime" }
+ surrealism-types = { version = "0.2", path = "surrealism/types", default-features = false }
+ # External surreal crates
+ affinitypool = "0.4.0"
++# Dorsid: Sid/Rid first-class record IDs (sibling fork crate).
++# See plans/okay-let-s-do-the-replicated-shell.md.
++dorsid = { path = "../diceware-ordinal/dorsid", default-features = false, features = [
++    "time",
++    "sid", "sid-persistent",
++    "rid", "rid-persistent",
++    "csprng-getrandom",
++] }
+ dmp = "0.2.3"
+ indxdb = "0.12.0"
+ lexicmp = "0.2.0"
+@@ -453,6 +461,13 @@ unwrap_used = "warn"
+ used_underscore_binding = "warn"
+ 
+ # Profiles
++[profile.dev]
++# Full debuginfo+codegen pushes rustc-LLVM over the memory cliff on Windows
++# nightly when the test binary links all of surrealdb-core + dorsid. Trim
++# debuginfo to line tables to keep test builds under the limit. Adjust to
++# `debug = 2` for richer debugger sessions when needed.
++debug = "line-tables-only"
++
+ [profile.release]
+ codegen-units = 1
+ lto = true
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+index 58401538b..a673f4918 100644
+--- a/rust-toolchain.toml
++++ b/rust-toolchain.toml
+@@ -1,7 +1,6 @@
+ [toolchain]
+-# Don't add a patch number to the channel!
+-# 1.91.1 (for example) is not valid toolchains and adding it breaks rust-analyzer and other tooling.
+-# adding only the minor version will already run on the latest patch version.
+-channel = "1.91"
++# Fork pinned to nightly to satisfy dorsid's #![feature(...)] requirements
++# (see plans/okay-let-s-do-the-replicated-shell.md, D1).
++channel = "nightly"
+ components = [ "rustfmt", "clippy" ]
+ targets = ["wasm32-unknown-unknown"]
+diff --git a/surrealdb/core/Cargo.toml b/surrealdb/core/Cargo.toml
+index 562dd093f..b6ecf4537 100644
+--- a/surrealdb/core/Cargo.toml
++++ b/surrealdb/core/Cargo.toml
+@@ -74,6 +74,7 @@ surrealml-core = { workspace = true, optional = true }
+ 
+ affinitypool = { workspace = true, optional = true }
+ dmp.workspace = true
++dorsid.workspace = true
+ indxdb = { workspace = true, optional = true }
+ js = { workspace = true, features = [
+     "array-buffer",
+@@ -224,7 +225,6 @@ criterion = { workspace = true, features = ["async_tokio"] }
+ env_logger.workspace = true
+ flate2.workspace = true
+ paste.workspace = true
+-pprof = { workspace = true, features = ["flamegraph", "criterion"] }
+ rstest.workspace = true
+ serial_test.workspace = true
+ temp-dir.workspace = true
+@@ -235,6 +235,12 @@ tokio-util.workspace = true
+ tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ wiremock.workspace = true
+ 
++# pprof's profiler relies on Unix-only libc types (pthread_t, siginfo_t,
++# ucontext_t) and does not compile on Windows. Used here only for criterion
++# benchmark flamegraphs.
++[target.'cfg(unix)'.dev-dependencies]
++pprof = { workspace = true, features = ["flamegraph", "criterion"] }
++
+ [package.metadata.cargo-machete]
+ # md-5 crate is imported as md5::, regex-syntax is optional (tied to arbitrary feature)
+ ignored = ["md-5", "regex-syntax"]
+diff --git a/surrealdb/core/src/catalog/compat/fixtures.rs b/surrealdb/core/src/catalog/compat/fixtures.rs
+index 1b76a4447..5d0860448 100644
+--- a/surrealdb/core/src/catalog/compat/fixtures.rs
++++ b/surrealdb/core/src/catalog/compat/fixtures.rs
+@@ -129,6 +129,7 @@ pub fn table_basic() -> TableDefinition {
+ 		changefeed: None,
+ 		comment: None,
+ 		table_type: TableType::Normal,
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+@@ -161,6 +162,7 @@ pub fn table_with_view() -> TableDefinition {
+ 		changefeed: None,
+ 		comment: Some("User statistics view".to_string()),
+ 		table_type: TableType::Normal,
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+@@ -185,6 +187,7 @@ pub fn table_schemafull() -> TableDefinition {
+ 		}),
+ 		comment: Some("Order records".to_string()),
+ 		table_type: TableType::Normal,
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+@@ -217,6 +220,7 @@ pub fn table_relation() -> TableDefinition {
+ 			to: vec!["posts".to_string(), "comments".to_string()],
+ 			enforced: true,
+ 		}),
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+@@ -242,6 +246,7 @@ pub fn table_with_materialized_view() -> TableDefinition {
+ 		changefeed: None,
+ 		comment: Some("Materialized view of active users".to_string()),
+ 		table_type: TableType::Normal,
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+@@ -263,6 +268,7 @@ pub fn table_any_type() -> TableDefinition {
+ 		changefeed: None,
+ 		comment: None,
+ 		table_type: TableType::Any,
++		id_generation: IdGeneration::default(),
+ 		cache_fields_ts: UuidExt::nil(),
+ 		cache_events_ts: UuidExt::nil(),
+ 		cache_tables_ts: UuidExt::nil(),
+diff --git a/surrealdb/core/src/catalog/table.rs b/surrealdb/core/src/catalog/table.rs
+index 038e70ffc..2ea0d421b 100644
+--- a/surrealdb/core/src/catalog/table.rs
++++ b/surrealdb/core/src/catalog/table.rs
+@@ -40,7 +40,7 @@ impl DeserializeRevisioned for TableId {
+ 	}
+ }
+ 
+-#[revisioned(revision = 1)]
++#[revisioned(revision = 2)]
+ #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+ pub struct TableDefinition {
+ 	pub(crate) namespace_id: NamespaceId,
+@@ -54,6 +54,9 @@ pub struct TableDefinition {
+ 	pub(crate) changefeed: Option<ChangeFeed>,
+ 	pub(crate) comment: Option<String>,
+ 	pub(crate) table_type: TableType,
++	/// How auto-generated record ids are minted on this table (Dorsid fork).
++	#[revision(start = 2)]
++	pub(crate) id_generation: IdGeneration,
+ 
+ 	/// The last time that a DEFINE FIELD was added to this table
+ 	pub(crate) cache_fields_ts: Uuid,
+@@ -87,6 +90,7 @@ impl TableDefinition {
+ 			changefeed: None,
+ 			comment: None,
+ 			table_type: TableType::default(),
++			id_generation: IdGeneration::default(),
+ 			cache_fields_ts: now,
+ 			cache_events_ts: now,
+ 			cache_tables_ts: now,
+@@ -118,6 +122,7 @@ impl TableDefinition {
+ 				.map(|v| sql::Expr::Literal(sql::Literal::String(v)))
+ 				.unwrap_or(sql::Expr::Literal(sql::Literal::None)),
+ 			table_type: self.table_type.clone().into(),
++			id_generation: self.id_generation.into(),
+ 			..Default::default()
+ 		}
+ 	}
+@@ -136,6 +141,7 @@ impl InfoStructure for TableDefinition {
+ 			"drop".to_string() => self.drop.into(),
+ 			"schemafull".to_string() => self.schemafull.into(),
+ 			"kind".to_string() => self.table_type.structure(),
++			"id_generation".to_string() => self.id_generation.structure(),
+ 			"view".to_string(), if let Some(v) = self.view => v.structure(),
+ 			"changefeed".to_string(), if let Some(v) = self.changefeed => v.structure(),
+ 			"permissions".to_string() => self.permissions.structure(),
+@@ -145,6 +151,34 @@ impl InfoStructure for TableDefinition {
+ 	}
+ }
+ 
++/// How a table's auto-generated record ids are minted when a row is created
++/// without an explicit `id` field.
++///
++/// - `Default`: existing 20-char random string (preserves upstream behaviour).
++/// - `Sid`: Dorsid `Sid` — i64-packed timestamp + realm + per-ms sequence;
++///   monotonic, collision-free within a realm. State is process-local and
++///   warmed up from KV on first use.
++/// - `Rid`: Dorsid `Rid` — i64 with 63-bit CSPRNG payload; stateless,
++///   multi-source safe.
++#[revisioned(revision = 1)]
++#[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
++pub enum IdGeneration {
++	#[default]
++	Default,
++	Sid,
++	Rid,
++}
++
++impl InfoStructure for IdGeneration {
++	fn structure(self) -> Value {
++		match self {
++			IdGeneration::Default => "DEFAULT".into(),
++			IdGeneration::Sid => "SID".into(),
++			IdGeneration::Rid => "RID".into(),
++		}
++	}
++}
++
+ /// The type of records stored by a table
+ #[revisioned(revision = 1)]
+ #[derive(Debug, Default, Hash, Clone, Eq, PartialEq)]
+diff --git a/surrealdb/core/src/catalog/test.rs b/surrealdb/core/src/catalog/test.rs
+index 98daa814f..ec833c13b 100644
+--- a/surrealdb/core/src/catalog/test.rs
++++ b/surrealdb/core/src/catalog/test.rs
+@@ -60,11 +60,12 @@ use crate::val::{Datetime, TableName, Value};
+ 	}),
+ 	comment: Some("comment".to_string()),
+ 	table_type: TableType::Normal,
++	id_generation: IdGeneration::default(),
+ 	cache_fields_ts: Uuid::default(),
+ 	cache_events_ts: Uuid::default(),
+ 	cache_tables_ts: Uuid::default(),
+ 	cache_indexes_ts: Uuid::default(),
+-}, 149)]
++}, 151)]
+ #[case::subscription(SubscriptionDefinition {
+ 	id: Uuid::default(),
+ 	node: Uuid::default(),
+diff --git a/surrealdb/core/src/ctx/context.rs b/surrealdb/core/src/ctx/context.rs
+index 2dd0fe71b..32bb2b0ac 100644
+--- a/surrealdb/core/src/ctx/context.rs
++++ b/surrealdb/core/src/ctx/context.rs
+@@ -45,6 +45,7 @@ use crate::idx::trees::store::IndexStores;
+ use crate::kvs::Transaction;
+ use crate::kvs::cache::ds::DatastoreCache;
+ use crate::kvs::index::IndexBuilder;
++use crate::kvs::dorsid::SidRegistry;
+ use crate::kvs::sequences::Sequences;
+ use crate::kvs::slowlog::SlowLog;
+ use crate::mem::ALLOC;
+@@ -87,6 +88,8 @@ pub struct Context {
+ 	index_builder: Option<IndexBuilder>,
+ 	// The sequences
+ 	sequences: Option<Sequences>,
++	// The Dorsid Sid generator registry (one per Datastore).
++	sid_registry: Option<Arc<SidRegistry>>,
+ 	// Capabilities
+ 	capabilities: Arc<Capabilities>,
+ 	#[cfg(storage)]
+@@ -145,6 +148,7 @@ impl Context {
+ 			cache: None,
+ 			index_builder: None,
+ 			sequences: None,
++			sid_registry: None,
+ 			#[cfg(storage)]
+ 			temporary_directory: None,
+ 			transaction: None,
+@@ -194,6 +198,7 @@ impl Context {
+ 			cache: parent.cache.clone(),
+ 			index_builder: parent.index_builder.clone(),
+ 			sequences: parent.sequences.clone(),
++			sid_registry: parent.sid_registry.clone(),
+ 			#[cfg(storage)]
+ 			temporary_directory: parent.temporary_directory.clone(),
+ 			transaction: parent.transaction.clone(),
+@@ -230,6 +235,7 @@ impl Context {
+ 			cache: parent.cache.clone(),
+ 			index_builder: parent.index_builder.clone(),
+ 			sequences: parent.sequences.clone(),
++			sid_registry: parent.sid_registry.clone(),
+ 			#[cfg(storage)]
+ 			temporary_directory: parent.temporary_directory.clone(),
+ 			transaction: parent.transaction.clone(),
+@@ -273,6 +279,7 @@ impl Context {
+ 			cache: from.cache.clone(),
+ 			index_builder: from.index_builder.clone(),
+ 			sequences: from.sequences.clone(),
++			sid_registry: from.sid_registry.clone(),
+ 			#[cfg(storage)]
+ 			temporary_directory: from.temporary_directory.clone(),
+ 			transaction: from.transaction.clone(),
+@@ -309,6 +316,7 @@ impl Context {
+ 			cache: from.cache.clone(),
+ 			index_builder: from.index_builder.clone(),
+ 			sequences: from.sequences.clone(),
++			sid_registry: from.sid_registry.clone(),
+ 			#[cfg(storage)]
+ 			temporary_directory: from.temporary_directory.clone(),
+ 			transaction: None,
+@@ -336,6 +344,7 @@ impl Context {
+ 		index_stores: IndexStores,
+ 		index_builder: IndexBuilder,
+ 		sequences: Sequences,
++		sid_registry: Arc<SidRegistry>,
+ 		cache: Arc<DatastoreCache>,
+ 		#[cfg(feature = "http")] http_client: Arc<HttpClient>,
+ 		#[cfg(storage)] temporary_directory: Option<Arc<PathBuf>>,
+@@ -358,6 +367,7 @@ impl Context {
+ 			cache: Some(cache),
+ 			index_builder: Some(index_builder),
+ 			sequences: Some(sequences),
++			sid_registry: Some(sid_registry),
+ 			#[cfg(storage)]
+ 			temporary_directory,
+ 			transaction: None,
+@@ -397,6 +407,7 @@ impl Context {
+ 			cache: None,
+ 			index_builder: None,
+ 			sequences: None,
++			sid_registry: None,
+ 			#[cfg(storage)]
+ 			temporary_directory: None,
+ 			transaction: None,
+@@ -637,6 +648,11 @@ impl Context {
+ 		self.sequences.as_ref()
+ 	}
+ 
++	/// Return the Dorsid Sid generator registry.
++	pub(crate) fn get_sid_registry(&self) -> Option<&Arc<SidRegistry>> {
++		self.sid_registry.as_ref()
++	}
++
+ 	pub(crate) fn try_get_sequences(&self) -> Result<&Sequences> {
+ 		if let Some(sqs) = self.get_sequences() {
+ 			Ok(sqs)
+diff --git a/surrealdb/core/src/doc/alter.rs b/surrealdb/core/src/doc/alter.rs
+index 955ed306a..a51027d50 100644
+--- a/surrealdb/core/src/doc/alter.rs
++++ b/surrealdb/core/src/doc/alter.rs
+@@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
+ use reblessive::tree::Stk;
+ use surrealdb_types::ToSql;
+ 
+-use crate::catalog::RecordType;
++use crate::catalog::{IdGeneration, RecordType};
+ use crate::ctx::{Context, FrozenContext};
+ use crate::dbs::{Options, Statement, Workable};
+ use crate::doc::Document;
+@@ -13,7 +13,7 @@ use crate::err::Error;
+ use crate::expr::data::Data;
+ use crate::expr::paths::{ID, IN, OUT};
+ use crate::expr::{AssignOperator, FlowResultExt, Idiom};
+-use crate::val::{RecordId, Value};
++use crate::val::{RecordId, TableName, Value};
+ 
+ impl Document {
+ 	/// Generate a record ID for CREATE, UPSERT, and UPDATE statements
+@@ -25,7 +25,7 @@ impl Document {
+ 	///
+ 	/// The method ensures that all expressions are properly evaluated before
+ 	/// being used as record IDs.
+-	pub(super) fn generate_record_id(&mut self) -> Result<()> {
++	pub(super) async fn generate_record_id(&mut self, ctx: &FrozenContext) -> Result<()> {
+ 		// Check if we need to generate a record id
+ 		if let Some(tb) = &self.r#gen {
+ 			// This is a CREATE, UPSERT, UPDATE, RELATE statement
+@@ -39,13 +39,13 @@ impl Document {
+ 				match &self.input_data {
+ 					// There is a data clause so fetch a record id
+ 					Some(data) => match data.rid() {
+-						Value::None => RecordId::random_for_table(tb.clone()),
++						Value::None => self.generate_default_id(ctx, tb.clone()).await?,
+ 						// Generate a new id from the id field
+ 						id => id.generate(tb.clone(), false)?,
+ 						// Generate a new random table id
+ 					},
+ 					// There is no data clause so create a record id
+-					None => RecordId::random_for_table(tb.clone()),
++					None => self.generate_default_id(ctx, tb.clone()).await?,
+ 				}
+ 			};
+ 
+@@ -62,6 +62,32 @@ impl Document {
+ 		//
+ 		Ok(())
+ 	}
++
++	/// Mint a default record id for the given table based on its
++	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
++	/// Dorsid `Sid` and `Rid` IDs; the `Default` arm preserves upstream
++	/// random-string behaviour.
++	async fn generate_default_id(&self, ctx: &FrozenContext, tb: TableName) -> Result<RecordId> {
++		let tb_def = Arc::clone(self.doc_ctx.tb()?);
++		match tb_def.id_generation {
++			IdGeneration::Default => Ok(RecordId::random_for_table(tb)),
++			IdGeneration::Rid => {
++				let rid = dorsid::rid::next_persistent(None)
++					.map_err(|e| anyhow::anyhow!("dorsid Rid generation failed: {e}"))?;
++				Ok(RecordId::new(tb, rid.to_bits()))
++			}
++			IdGeneration::Sid => {
++				let registry = ctx.get_sid_registry().ok_or_else(|| {
++					anyhow::anyhow!(
++						"Sid generation requires a SidRegistry on the context; this is a bug"
++					)
++				})?;
++				let txn = ctx.tx();
++				let sid = registry.next_sid_warmed(&txn, &tb_def).await?;
++				Ok(RecordId::new(tb, sid.to_bits()))
++			}
++		}
++	}
+ 	/// Clears all of the content of this document.
+ 	/// This is used to empty the current content
+ 	/// of the document within a `DELETE` statement.
+@@ -372,3 +398,215 @@ async fn apply_assignments(
+ 	}
+ 	Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++	use surrealdb_types::{RecordIdKey, Value};
++
++	use crate::dbs::Session;
++	use crate::kvs::Datastore;
++
++	async fn fresh_ds() -> (Datastore, Session) {
++		let ds = Datastore::new("memory").await.unwrap();
++		let sess = Session::owner().with_ns("ns").with_db("db");
++		// Bootstrap ns + db so subsequent DEFINE TABLE etc. resolve.
++		ds.execute("DEFINE NAMESPACE ns; DEFINE DATABASE db;", &sess, None).await.unwrap();
++		(ds, sess)
++	}
++
++	/// Extract the single record id from a `CREATE foo;` response, asserting
++	/// the response shape along the way.
++	fn created_record_key(result: &Value) -> &RecordIdKey {
++		let Value::Array(arr) = result else {
++			panic!("expected array result, got: {result:?}");
++		};
++		assert_eq!(arr.len(), 1, "expected single created record");
++		let Value::Object(obj) = &arr[0] else {
++			panic!("expected object record, got: {:?}", arr[0]);
++		};
++		let id = obj.get("id").unwrap_or_else(|| panic!("no id field in {obj:?}"));
++		let Value::RecordId(rid) = id else {
++			panic!("expected RecordId, got: {id:?}");
++		};
++		&rid.key
++	}
++
++	#[tokio::test]
++	async fn create_on_id_rid_table_yields_positive_i64() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute("DEFINE TABLE foo ID RID;", &sess, None).await.unwrap();
++
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let result_1 = res[0].result.as_ref().unwrap();
++		let RecordIdKey::Number(id_1) = created_record_key(result_1) else {
++			panic!("expected Number id for ID RID table, got: {:?}", created_record_key(result_1));
++		};
++		assert!(*id_1 >= 0, "persistent Rid must have sign bit 0, got {id_1}");
++
++		// A second CREATE produces a different id (collision odds at 2 draws
++		// into a 63-bit space are vanishingly small).
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let result_2 = res[0].result.as_ref().unwrap();
++		let RecordIdKey::Number(id_2) = created_record_key(result_2) else {
++			panic!("expected Number id on second draw");
++		};
++		assert_ne!(*id_1, *id_2, "two Rid draws should not collide");
++		assert!(*id_2 >= 0);
++	}
++
++	#[tokio::test]
++	async fn create_on_default_table_yields_string_id() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute("DEFINE TABLE foo;", &sess, None).await.unwrap();
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let key = created_record_key(res[0].result.as_ref().unwrap());
++		assert!(
++			matches!(key, RecordIdKey::String(_)),
++			"default id_generation should produce a string id, got: {key:?}",
++		);
++	}
++
++	#[tokio::test]
++	async fn create_on_id_sid_table_yields_monotonic_positive_i64() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute("DEFINE TABLE foo ID SID;", &sess, None).await.unwrap();
++
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let RecordIdKey::Number(id_1) = created_record_key(res[0].result.as_ref().unwrap()) else {
++			panic!("expected Number id for ID SID table");
++		};
++		assert!(*id_1 >= 0, "persistent Sid must have sign bit 0, got {id_1}");
++
++		// Burst of CREATEs within the same millisecond should each get a
++		// distinct, strictly-increasing Sid (the per-ms sequence counter).
++		let mut last = *id_1;
++		for _ in 0..10 {
++			let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++			let RecordIdKey::Number(id_n) = created_record_key(res[0].result.as_ref().unwrap())
++			else {
++				panic!("expected Number id");
++			};
++			assert!(*id_n > last, "Sids must be strictly increasing: {id_n} <= {last}");
++			assert!(*id_n >= 0);
++			last = *id_n;
++		}
++	}
++
++	#[tokio::test]
++	async fn sid_warmup_lifts_floor_above_stored_max() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute("DEFINE TABLE foo ID SID;", &sess, None).await.unwrap();
++
++		// Mint a real Sid at "now" to get a plant value the generator
++		// will accept as a floor (i.e. timestamp not in the far future).
++		// Then plant a slightly-larger derived value so warmup must lift
++		// past it on the next mint. Adding 1024 (one full seq window)
++		// guarantees the planted id sits strictly above the timestamp the
++		// generator just saw.
++		let baseline_sid = dorsid::sid::Generator::new(0).unwrap().next().unwrap();
++		let planted_id: i64 = baseline_sid.to_bits() + 1024;
++		ds.execute(&format!("CREATE foo:{planted_id};"), &sess, None).await.unwrap();
++
++		// First mint after the planted row must scan, find the floor, and
++		// emit a Sid strictly greater than the planted id.
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let RecordIdKey::Number(minted) = created_record_key(res[0].result.as_ref().unwrap())
++		else {
++			panic!("expected Number id post-warmup");
++		};
++		assert!(
++			*minted > planted_id,
++			"warmup should lift the floor above {planted_id}, got {minted}",
++		);
++
++		// A subsequent mint also stays above the planted id.
++		let res = ds.execute("CREATE foo;", &sess, None).await.unwrap();
++		let RecordIdKey::Number(minted_2) = created_record_key(res[0].result.as_ref().unwrap())
++		else {
++			panic!("expected Number id on second mint");
++		};
++		assert!(*minted_2 > *minted, "second Sid must exceed first ({minted_2} > {minted})");
++	}
++
++	#[tokio::test]
++	async fn explicit_id_wins_over_rid_policy() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute("DEFINE TABLE foo ID RID;", &sess, None).await.unwrap();
++		let res = ds.execute("CREATE foo:hello;", &sess, None).await.unwrap();
++		let key = created_record_key(res[0].result.as_ref().unwrap());
++		assert!(
++			matches!(key, RecordIdKey::String(s) if s == "hello"),
++			"explicit id should be preserved, got: {key:?}",
++		);
++	}
++
++	#[tokio::test]
++	async fn all_three_id_modes_coexist_in_one_db() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute(
++			"DEFINE TABLE t_default;\
++			 DEFINE TABLE t_sid ID SID;\
++			 DEFINE TABLE t_rid ID RID;",
++			&sess,
++			None,
++		)
++		.await
++		.unwrap();
++
++		let res = ds
++			.execute(
++				"CREATE t_default; CREATE t_sid; CREATE t_rid;",
++				&sess,
++				None,
++			)
++			.await
++			.unwrap();
++		assert!(matches!(created_record_key(res[0].result.as_ref().unwrap()), RecordIdKey::String(_)));
++		let RecordIdKey::Number(sid) = created_record_key(res[1].result.as_ref().unwrap()) else {
++			panic!("t_sid record did not produce a Number id");
++		};
++		let RecordIdKey::Number(rid) = created_record_key(res[2].result.as_ref().unwrap()) else {
++			panic!("t_rid record did not produce a Number id");
++		};
++		assert!(*sid >= 0 && *rid >= 0, "both persistent forms should have sign bit 0");
++	}
++
++	#[tokio::test]
++	async fn info_for_db_reports_id_generation_per_table() {
++		let (ds, sess) = fresh_ds().await;
++		ds.execute(
++			"DEFINE TABLE t_default;\
++			 DEFINE TABLE t_sid ID SID;\
++			 DEFINE TABLE t_rid ID RID;",
++			&sess,
++			None,
++		)
++		.await
++		.unwrap();
++
++		let res = ds.execute("INFO FOR DB STRUCTURE;", &sess, None).await.unwrap();
++		let Value::Object(info) = res[0].result.as_ref().unwrap() else {
++			panic!("INFO FOR DB STRUCTURE should return an object");
++		};
++		let tables = info.get("tables").expect("info must have tables");
++		let Value::Array(table_arr) = tables else {
++			panic!("tables should be an array, got: {tables:?}");
++		};
++
++		fn id_gen_for<'a>(arr: &'a [Value], name: &str) -> &'a Value {
++			for t in arr {
++				let Value::Object(obj) = t else { continue };
++				if matches!(obj.get("name"), Some(Value::String(n)) if n == name) {
++					return obj.get("id_generation").unwrap_or_else(|| {
++						panic!("table {name} structure is missing id_generation: {obj:?}")
++					});
++				}
++			}
++			panic!("table {name} not found in INFO output: {arr:?}");
++		}
++
++		assert_eq!(id_gen_for(table_arr, "t_default"), &Value::String("DEFAULT".into()));
++		assert_eq!(id_gen_for(table_arr, "t_sid"), &Value::String("SID".into()));
++		assert_eq!(id_gen_for(table_arr, "t_rid"), &Value::String("RID".into()));
++	}
++}
+diff --git a/surrealdb/core/src/doc/create.rs b/surrealdb/core/src/doc/create.rs
+index b82d3f271..eea7ebdb4 100644
+--- a/surrealdb/core/src/doc/create.rs
++++ b/surrealdb/core/src/doc/create.rs
+@@ -15,7 +15,7 @@ impl Document {
+ 		stm: &Statement<'_>,
+ 	) -> Result<Value, IgnoreError> {
+ 		self.process_record_data(stk, ctx, opt, stm).await?;
+-		self.generate_record_id()?;
++		self.generate_record_id(ctx).await?;
+ 		self.check_permissions_quick(opt, stm).await?;
+ 		self.check_table_type(stm).await?;
+ 		self.check_data_fields(stk, ctx, opt, stm).await?;
+diff --git a/surrealdb/core/src/doc/insert.rs b/surrealdb/core/src/doc/insert.rs
+index e3bb6ad05..f03803806 100644
+--- a/surrealdb/core/src/doc/insert.rs
++++ b/surrealdb/core/src/doc/insert.rs
+@@ -28,7 +28,7 @@ impl Document {
+ 			return self.insert_update(stk, ctx, opt, &Statement::Insert(stm)).await;
+ 		}
+ 		// Try to generate a record id if none is present
+-		self.generate_record_id()?;
++		self.generate_record_id(ctx).await?;
+ 		// is this retryable?
+ 		// it is retryable when some data is present on the insert statement to update.
+ 		let retryable = stm.update.is_some();
+@@ -141,7 +141,7 @@ impl Document {
+ 		self.modify_for_update_retry(retry, val);
+ 
+ 		// we restarted, so we might need to generate a record id again?
+-		self.generate_record_id()?;
++		self.generate_record_id(ctx).await?;
+ 
+ 		self.insert_update(stk, ctx, opt, &Statement::Insert(stm)).await
+ 	}
+diff --git a/surrealdb/core/src/doc/relate.rs b/surrealdb/core/src/doc/relate.rs
+index bb49181bf..b9c7e5354 100644
+--- a/surrealdb/core/src/doc/relate.rs
++++ b/surrealdb/core/src/doc/relate.rs
+@@ -17,7 +17,7 @@ impl Document {
+ 		// Process the record data
+ 		self.process_record_data(stk, ctx, opt, stm).await?;
+ 		// Generate a record id
+-		self.generate_record_id()?;
++		self.generate_record_id(ctx).await?;
+ 		// Set default field values
+ 		self.default_record_data(ctx, opt, stm).await?;
+ 		// Check if table has correct relation status
+diff --git a/surrealdb/core/src/doc/upsert.rs b/surrealdb/core/src/doc/upsert.rs
+index b7b031a0a..25708a135 100644
+--- a/surrealdb/core/src/doc/upsert.rs
++++ b/surrealdb/core/src/doc/upsert.rs
+@@ -95,7 +95,7 @@ impl Document {
+ 
+ 		// Skip generate_record_id in retry mode since the ID is already set correctly
+ 		if !self.retry {
+-			self.generate_record_id()?;
++			self.generate_record_id(ctx).await?;
+ 		}
+ 
+ 		self.upsert_update(stk, ctx, opt, stm).await
+@@ -111,7 +111,7 @@ impl Document {
+ 	) -> Result<Value, IgnoreError> {
+ 		self.check_permissions_quick(opt, stm).await?;
+ 		self.process_record_data(stk, ctx, opt, stm).await?;
+-		self.generate_record_id()?;
++		self.generate_record_id(ctx).await?;
+ 		self.check_table_type(stm).await?;
+ 		self.check_data_fields(stk, ctx, opt, stm).await?;
+ 		self.default_record_data(ctx, opt, stm).await?;
+diff --git a/surrealdb/core/src/expr/statements/define/table.rs b/surrealdb/core/src/expr/statements/define/table.rs
+index ca894e48f..266de1b43 100644
+--- a/surrealdb/core/src/expr/statements/define/table.rs
++++ b/surrealdb/core/src/expr/statements/define/table.rs
+@@ -11,8 +11,8 @@ use crate::catalog::aggregation::{
+ };
+ use crate::catalog::providers::{DatabaseProvider, NamespaceProvider, TableProvider};
+ use crate::catalog::{
+-	DatabaseId, FieldDefinition, Metadata, NamespaceId, Permissions, Record, RecordType,
+-	TableDefinition, TableType, ViewDefinition,
++	DatabaseId, FieldDefinition, IdGeneration, Metadata, NamespaceId, Permissions, Record,
++	RecordType, TableDefinition, TableType, ViewDefinition,
+ };
+ use crate::ctx::FrozenContext;
+ use crate::dbs::Options;
+@@ -43,6 +43,7 @@ pub(crate) struct DefineTableStatement {
+ 	pub changefeed: Option<ChangeFeed>,
+ 	pub comment: Expr,
+ 	pub table_type: TableType,
++	pub id_generation: IdGeneration,
+ }
+ 
+ impl Default for DefineTableStatement {
+@@ -58,6 +59,7 @@ impl Default for DefineTableStatement {
+ 			changefeed: None,
+ 			comment: Expr::Literal(Literal::None),
+ 			table_type: TableType::default(),
++			id_generation: IdGeneration::default(),
+ 		}
+ 	}
+ }
+@@ -123,6 +125,7 @@ impl DefineTableStatement {
+ 			drop: self.drop,
+ 			schemafull: self.full,
+ 			table_type: self.table_type.clone(),
++			id_generation: self.id_generation,
+ 			view: self.view.clone().map(|v| v.to_definition()).transpose()?,
+ 			permissions: self.permissions.clone(),
+ 			comment,
+diff --git a/surrealdb/core/src/kvs/dorsid.rs b/surrealdb/core/src/kvs/dorsid.rs
+new file mode 100644
+index 000000000..81aec28a7
+--- /dev/null
++++ b/surrealdb/core/src/kvs/dorsid.rs
+@@ -0,0 +1,189 @@
++//! In-process Dorsid `Sid` generator registry.
++//!
++//! One [`dorsid::sid::Generator`] is maintained per `(NamespaceId, DatabaseId, TableId)`
++//! tuple. Generators are lazily constructed on first request and reused for
++//! the lifetime of the [`crate::kvs::Datastore`]. Each [`Datastore`] owns its
++//! own registry — different datastores don't share state, which keeps tests
++//! deterministic under cargo's parallel test runner.
++//!
++//! The `realm_id` shared by every generator on this registry is captured at
++//! `Datastore` construction time from the `DORSID_REALM_ID` environment
++//! variable (defaulting to 0). Multi-writer Sid uniqueness is achieved by
++//! running each writer with a distinct realm id; collisions between realms
++//! are impossible by construction (see the Dorsid spec).
++//!
++//! On the first mint for a given table after process boot, the registry
++//! performs a one-shot warm-up: a reverse range scan over the table's
++//! record keys finds the largest existing `Number(i64)` id, wraps it as a
++//! [`dorsid::Sid`], and calls
++//! [`dorsid::sid::Generator::set_floor`]. This ensures the next mint
++//! produces a Sid strictly greater than any previously persisted one — so
++//! restarts (and any clock regression that comes with them) cannot
++//! resurrect already-used Sids.
++
++use std::sync::Arc;
++
++use dashmap::DashMap;
++use parking_lot::Mutex;
++use tokio::sync::OnceCell;
++
++use crate::catalog::{DatabaseId, NamespaceId, TableDefinition, TableId};
++use crate::kvs::Transaction;
++use crate::val::RecordIdKey;
++
++type GeneratorMap = DashMap<(NamespaceId, DatabaseId, TableId), Arc<Mutex<dorsid::sid::Generator>>>;
++type WarmupMap = DashMap<(NamespaceId, DatabaseId, TableId), Arc<OnceCell<()>>>;
++
++pub struct SidRegistry {
++	realm_id: u16,
++	generators: GeneratorMap,
++	/// Per-(ns,db,tb) marker that the table's max stored Sid has been
++	/// scanned and applied via [`dorsid::sid::Generator::set_floor`].
++	warmups: WarmupMap,
++}
++
++impl SidRegistry {
++	/// Construct an empty registry pinned to the given realm id (typically
++	/// derived from the `DORSID_REALM_ID` env var; see [`SidRegistry::realm_from_env`]).
++	pub fn new(realm_id: u16) -> Self {
++		Self {
++			realm_id,
++			generators: DashMap::new(),
++			warmups: DashMap::new(),
++		}
++	}
++
++	/// Resolve a realm id from the `DORSID_REALM_ID` environment variable.
++	/// Returns `0` when the variable is unset, empty, or invalid — matching
++	/// the single-writer default. A non-empty-but-invalid value (e.g. a
++	/// non-numeric string or one above 1023) emits a `tracing::warn!` and
++	/// falls back to 0.
++	pub fn realm_from_env() -> u16 {
++		match std::env::var("DORSID_REALM_ID") {
++			Ok(val) if !val.is_empty() => match val.parse::<u16>() {
++				Ok(id) if id < 1024 => id,
++				_ => {
++					tracing::warn!(
++						"DORSID_REALM_ID={val:?} is not a valid realm (must be 0..=1023); falling back to 0",
++					);
++					0
++				}
++			},
++			_ => 0,
++		}
++	}
++
++	/// Realm id that every generator on this registry is initialised with.
++	/// Kept as a public accessor for diagnostics and future ALTER TABLE
++	/// support that may want to inspect the writer's realm.
++	#[expect(dead_code, reason = "diagnostic accessor; not yet consumed in-tree")]
++	pub fn realm_id(&self) -> u16 {
++		self.realm_id
++	}
++
++	/// Get or insert the generator for a table.
++	fn get_or_init_generator(
++		&self,
++		ns: NamespaceId,
++		db: DatabaseId,
++		tb: TableId,
++	) -> anyhow::Result<Arc<Mutex<dorsid::sid::Generator>>> {
++		// `DashMap::entry().or_try_insert_with` returns a RefMut, but we
++		// just want an owned Arc clone so we don't hold the map lock.
++		let entry = self.generators.entry((ns, db, tb)).or_try_insert_with(|| {
++			dorsid::sid::Generator::new(self.realm_id)
++				.map(|g| Arc::new(Mutex::new(g)))
++				.map_err(|e| anyhow::anyhow!("dorsid Sid generator init failed: {e}"))
++		})?;
++		Ok(entry.value().clone())
++	}
++
++	/// Mint the next `Sid` for the given table, lazily constructing the
++	/// per-table generator on first call. Sleeps briefly (≤ 1 ms) on sequence
++	/// overflow — see `D6` in `plans/okay-let-s-do-the-replicated-shell.md`.
++	/// Use [`next_sid_warmed`](Self::next_sid_warmed) when a [`Transaction`]
++	/// is in hand — that variant scans the table's max stored Sid on first
++	/// call and seeds the generator with [`dorsid::sid::Generator::set_floor`].
++	pub fn next_sid(
++		&self,
++		ns: NamespaceId,
++		db: DatabaseId,
++		tb: TableId,
++	) -> anyhow::Result<dorsid::Sid> {
++		let generator = self.get_or_init_generator(ns, db, tb)?;
++		let mut g = generator.lock();
++		g.next().map_err(|e| anyhow::anyhow!("dorsid Sid generation failed: {e}"))
++	}
++
++	/// Mint the next `Sid` for `tb_def`, performing a one-shot warm-up on
++	/// the first call after process boot: a reverse range scan finds the
++	/// largest existing `Number(i64)` record id and applies it as the
++	/// generator's floor.
++	///
++	/// Idempotent across calls — subsequent calls hit the cached
++	/// [`OnceCell`] and skip the scan.
++	pub async fn next_sid_warmed(
++		&self,
++		txn: &Transaction,
++		tb_def: &TableDefinition,
++	) -> anyhow::Result<dorsid::Sid> {
++		let ns = tb_def.namespace_id;
++		let db = tb_def.database_id;
++		let tb = tb_def.table_id;
++
++		let cell = self
++			.warmups
++			.entry((ns, db, tb))
++			.or_insert_with(|| Arc::new(OnceCell::new()))
++			.value()
++			.clone();
++
++		cell.get_or_try_init(|| async { self.warmup_for_table(txn, tb_def).await }).await?;
++
++		self.next_sid(ns, db, tb)
++	}
++
++	/// Scan the table's record keys in reverse, decode the largest
++	/// `RecordIdKey::Number(i64)`, and feed it to
++	/// [`dorsid::sid::Generator::set_floor`]. Silent no-op when the table
++	/// is empty or its largest key isn't a `Number` (e.g. a string id
++	/// landed there via an explicit-id INSERT).
++	async fn warmup_for_table(
++		&self,
++		txn: &Transaction,
++		tb_def: &TableDefinition,
++	) -> anyhow::Result<()> {
++		let ns = tb_def.namespace_id;
++		let db = tb_def.database_id;
++		let tb_id = tb_def.table_id;
++		let tb_name = &tb_def.name;
++
++		let beg = crate::key::record::prefix(ns, db, tb_name)?;
++		let end = crate::key::record::suffix(ns, db, tb_name)?;
++
++		// Reverse scan, limit 1: the lexicographically last record key in
++		// the table's byte range. storekey IndexFormat keeps numeric ids
++		// numerically ordered, so for an ID SID table this is the highest
++		// previously-issued Sid.
++		let rows = txn.scan_raw_keys_reverse(beg..end, 1).await?;
++		for key_bytes in rows {
++			let Ok(record_key) = crate::key::record::RecordKey::decode_key(&key_bytes) else {
++				continue;
++			};
++			if let RecordIdKey::Number(n) = record_key.id {
++				let generator = self.get_or_init_generator(ns, db, tb_id)?;
++				generator.lock().set_floor(dorsid::Sid::from_bits(n));
++			}
++		}
++		Ok(())
++	}
++}
++
++impl std::fmt::Debug for SidRegistry {
++	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++		f.debug_struct("SidRegistry")
++			.field("realm_id", &self.realm_id)
++			.field("tables_seen", &self.generators.len())
++			.finish()
++	}
++}
+diff --git a/surrealdb/core/src/kvs/ds.rs b/surrealdb/core/src/kvs/ds.rs
+index 6801bc7d1..956366008 100644
+--- a/surrealdb/core/src/kvs/ds.rs
++++ b/surrealdb/core/src/kvs/ds.rs
+@@ -78,6 +78,7 @@ use crate::kvs::ds::requirements::{
+ 	TransactionBuilderFactoryRequirements, TransactionBuilderRequirements,
+ };
+ use crate::kvs::index::IndexBuilder;
++use crate::kvs::dorsid::SidRegistry;
+ use crate::kvs::sequences::Sequences;
+ use crate::kvs::slowlog::SlowLog;
+ use crate::kvs::tasklease::{LeaseHandler, TaskLeaseType};
+@@ -133,6 +134,9 @@ pub struct Datastore {
+ 	buckets: BucketsManager,
+ 	// The sequences
+ 	sequences: Sequences,
++	// In-process Dorsid Sid generator registry (one Generator per
++	// (NamespaceId, DatabaseId, TableId)). See kvs::dorsid for semantics.
++	sid_registry: Arc<SidRegistry>,
+ 	// The surrealism cache
+ 	#[cfg(feature = "surrealism")]
+ 	surrealism_cache: Arc<SurrealismCache>,
+@@ -670,6 +674,7 @@ impl Datastore {
+ 			cache: Arc::new(DatastoreCache::new()),
+ 			buckets: self.buckets,
+ 			sequences: Sequences::new(self.transaction_factory.clone(), self.id),
++			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
+ 			transaction_factory: self.transaction_factory,
+ 			#[cfg(feature = "surrealism")]
+ 			surrealism_cache: Arc::new(SurrealismCache::new()),
+@@ -1842,6 +1847,11 @@ impl Datastore {
+ 		&self.sequences
+ 	}
+ 
++	#[expect(dead_code, reason = "accessor for completeness; mints route via Context")]
++	pub(crate) fn sid_registry(&self) -> &Arc<SidRegistry> {
++		&self.sid_registry
++	}
++
+ 	pub(crate) fn transaction_factory(&self) -> &TransactionFactory {
+ 		&self.transaction_factory
+ 	}
+@@ -2293,6 +2303,7 @@ impl Datastore {
+ 			self.index_stores.clone(),
+ 			self.index_builder.clone(),
+ 			self.sequences.clone(),
++			self.sid_registry.clone(),
+ 			self.cache.clone(),
+ 			#[cfg(feature = "http")]
+ 			self.http_client.clone(),
+diff --git a/surrealdb/core/src/kvs/ds/builder.rs b/surrealdb/core/src/kvs/ds/builder.rs
+index 380ff96cb..bb40600dd 100644
+--- a/surrealdb/core/src/kvs/ds/builder.rs
++++ b/surrealdb/core/src/kvs/ds/builder.rs
+@@ -23,6 +23,7 @@ use crate::http::HttpClient;
+ use crate::iam::jwks::JwksCache;
+ use crate::idx::trees::store::IndexStores;
+ use crate::kvs::cache::ds::DatastoreCache;
++use crate::kvs::dorsid::SidRegistry;
+ use crate::kvs::index::IndexBuilder;
+ use crate::kvs::sequences::Sequences;
+ use crate::kvs::slowlog::SlowLog;
+@@ -189,6 +190,7 @@ impl Builder {
+ 			cache: Arc::new(DatastoreCache::new()),
+ 			buckets,
+ 			sequences: Sequences::new(tf, id),
++			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
+ 			#[cfg(feature = "surrealism")]
+ 			surrealism_cache: Arc::new(SurrealismCache::new()),
+ 			async_event_trigger,
+diff --git a/surrealdb/core/src/kvs/mod.rs b/surrealdb/core/src/kvs/mod.rs
+index c18abb101..465027ae6 100644
+--- a/surrealdb/core/src/kvs/mod.rs
++++ b/surrealdb/core/src/kvs/mod.rs
+@@ -41,6 +41,7 @@ mod tikv;
+ mod tests;
+ 
+ pub(crate) mod cache;
++pub(crate) mod dorsid;
+ pub(crate) mod index;
+ pub(crate) mod sequences;
+ pub(crate) mod slowlog;
+diff --git a/surrealdb/core/src/kvs/tx.rs b/surrealdb/core/src/kvs/tx.rs
+index 2cbf59c3c..3fab910a0 100644
+--- a/surrealdb/core/src/kvs/tx.rs
++++ b/surrealdb/core/src/kvs/tx.rs
+@@ -599,6 +599,21 @@ impl Transaction {
+ 		Ok(self.tr.scanr(beg..end, limit, skip, version).await.map_err(Error::from)?)
+ 	}
+ 
++	/// Reverse scan a raw byte range, returning just the keys. Thin wrapper
++	/// over [`crate::kvs::tr::Transactor::scanr`] used by the Dorsid Sid
++	/// warm-up path, which needs to iterate record keys with bounds built
++	/// from [`crate::key::record::prefix`] / [`crate::key::record::suffix`]
++	/// rather than from a `KVKey`-typed range.
++	#[instrument(level = "trace", target = "surrealdb::core::kvs::tx", skip_all)]
++	pub async fn scan_raw_keys_reverse(
++		&self,
++		rng: Range<Vec<u8>>,
++		limit: u32,
++	) -> Result<Vec<crate::kvs::Key>> {
++		let rows = self.tr.scanr(rng, limit.into(), 0, None).await.map_err(Error::from)?;
++		Ok(rows.into_iter().map(|(k, _v)| k).collect())
++	}
++
+ 	/// Count the total number of keys within a range in the datastore.
+ 	///
+ 	/// This function fetches the total count, in batches, with multiple
+diff --git a/surrealdb/core/src/sql/mod.rs b/surrealdb/core/src/sql/mod.rs
+index b812616a0..56445f72c 100644
+--- a/surrealdb/core/src/sql/mod.rs
++++ b/surrealdb/core/src/sql/mod.rs
+@@ -105,6 +105,6 @@ pub(crate) use self::statements::{
+ 	InsertStatement, KillStatement, LiveStatement, RelateStatement, SelectStatement,
+ 	UpdateStatement, UpsertStatement,
+ };
+-pub(crate) use self::table_type::TableType;
++pub(crate) use self::table_type::{IdGeneration, TableType};
+ pub(crate) use self::view::View;
+ pub(crate) use self::with::With;
+diff --git a/surrealdb/core/src/sql/statements/define/table.rs b/surrealdb/core/src/sql/statements/define/table.rs
+index 404cd7c28..5da911880 100644
+--- a/surrealdb/core/src/sql/statements/define/table.rs
++++ b/surrealdb/core/src/sql/statements/define/table.rs
+@@ -3,7 +3,7 @@ use surrealdb_types::{SqlFormat, ToSql, write_sql};
+ use super::DefineKind;
+ use crate::fmt::{CoverStmts, EscapeKwFreeIdent};
+ use crate::sql::changefeed::ChangeFeed;
+-use crate::sql::{Expr, Literal, Permissions, TableType, View};
++use crate::sql::{Expr, IdGeneration, Literal, Permissions, TableType, View};
+ 
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+@@ -18,6 +18,7 @@ pub(crate) struct DefineTableStatement {
+ 	pub changefeed: Option<ChangeFeed>,
+ 	pub comment: Expr,
+ 	pub table_type: TableType,
++	pub id_generation: IdGeneration,
+ }
+ 
+ impl Default for DefineTableStatement {
+@@ -33,6 +34,7 @@ impl Default for DefineTableStatement {
+ 			changefeed: None,
+ 			comment: Expr::Literal(Literal::None),
+ 			table_type: TableType::default(),
++			id_generation: IdGeneration::default(),
+ 		}
+ 	}
+ }
+@@ -83,6 +85,11 @@ impl ToSql for DefineTableStatement {
+ 		} else {
+ 			" SCHEMALESS"
+ 		});
++		match self.id_generation {
++			IdGeneration::Default => {}
++			IdGeneration::Sid => f.push_str(" ID SID"),
++			IdGeneration::Rid => f.push_str(" ID RID"),
++		}
+ 		if !matches!(self.comment, Expr::Literal(Literal::None)) {
+ 			write_sql!(f, sql_fmt, " COMMENT {}", CoverStmts(&self.comment));
+ 		}
+@@ -116,6 +123,7 @@ impl From<DefineTableStatement> for crate::expr::statements::DefineTableStatemen
+ 			changefeed: v.changefeed.map(Into::into),
+ 			comment: v.comment.into(),
+ 			table_type: v.table_type.into(),
++			id_generation: v.id_generation.into(),
+ 		}
+ 	}
+ }
+@@ -134,6 +142,7 @@ impl From<crate::expr::statements::DefineTableStatement> for DefineTableStatemen
+ 			changefeed: v.changefeed.map(Into::into),
+ 			comment: v.comment.into(),
+ 			table_type: v.table_type.into(),
++			id_generation: v.id_generation.into(),
+ 		}
+ 	}
+ }
+diff --git a/surrealdb/core/src/sql/table_type.rs b/surrealdb/core/src/sql/table_type.rs
+index 5836fed25..ea8266383 100644
+--- a/surrealdb/core/src/sql/table_type.rs
++++ b/surrealdb/core/src/sql/table_type.rs
+@@ -98,3 +98,33 @@ impl From<crate::catalog::Relation> for Relation {
+ 		}
+ 	}
+ }
++
++/// Surface AST mirror of [`crate::catalog::IdGeneration`]. See that type for semantics.
++#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
++pub enum IdGeneration {
++	#[default]
++	Default,
++	Sid,
++	Rid,
++}
++
++impl From<IdGeneration> for crate::catalog::IdGeneration {
++	fn from(v: IdGeneration) -> Self {
++		match v {
++			IdGeneration::Default => Self::Default,
++			IdGeneration::Sid => Self::Sid,
++			IdGeneration::Rid => Self::Rid,
++		}
++	}
++}
++
++impl From<crate::catalog::IdGeneration> for IdGeneration {
++	fn from(v: crate::catalog::IdGeneration) -> Self {
++		match v {
++			crate::catalog::IdGeneration::Default => Self::Default,
++			crate::catalog::IdGeneration::Sid => Self::Sid,
++			crate::catalog::IdGeneration::Rid => Self::Rid,
++		}
++	}
++}
+diff --git a/surrealdb/core/src/syn/lexer/keywords.rs b/surrealdb/core/src/syn/lexer/keywords.rs
+index 9c0d4b8d3..1c98723dd 100644
+--- a/surrealdb/core/src/syn/lexer/keywords.rs
++++ b/surrealdb/core/src/syn/lexer/keywords.rs
+@@ -162,6 +162,7 @@ pub(crate) static KEYWORDS: phf::Map<UniCase<&'static str>, TokenKind> = phf_map
+ 	UniCase::ascii("HEADERS") => TokenKind::Keyword(Keyword::Headers),
+ 	UniCase::ascii("HIGHLIGHTS") => TokenKind::Keyword(Keyword::Highlights),
+ 	UniCase::ascii("HNSW") => TokenKind::Keyword(Keyword::Hnsw),
++	UniCase::ascii("ID") => TokenKind::Keyword(Keyword::Id),
+ 	UniCase::ascii("IF") => TokenKind::Keyword(Keyword::If),
+ 	UniCase::ascii("IGNORE") => TokenKind::Keyword(Keyword::Ignore),
+ 	UniCase::ascii("IN") => TokenKind::Keyword(Keyword::In),
+@@ -241,6 +242,7 @@ pub(crate) static KEYWORDS: phf::Map<UniCase<&'static str>, TokenKind> = phf_map
+ 	UniCase::ascii("RETURN") => TokenKind::Keyword(Keyword::Return),
+ 	UniCase::ascii("REVOKE") => TokenKind::Keyword(Keyword::Revoke),
+ 	UniCase::ascii("REVOKED") => TokenKind::Keyword(Keyword::Revoked),
++	UniCase::ascii("RID") => TokenKind::Keyword(Keyword::Rid),
+ 	UniCase::ascii("ROLES") => TokenKind::Keyword(Keyword::Roles),
+ 	UniCase::ascii("ROOT") => TokenKind::Keyword(Keyword::Root),
+ 	UniCase::ascii("SC") => TokenKind::Keyword(Keyword::Scope),
+@@ -252,6 +254,7 @@ pub(crate) static KEYWORDS: phf::Map<UniCase<&'static str>, TokenKind> = phf_map
+ 	UniCase::ascii("SESSION") => TokenKind::Keyword(Keyword::Session),
+ 	UniCase::ascii("SET") => TokenKind::Keyword(Keyword::Set),
+ 	UniCase::ascii("SHOW") => TokenKind::Keyword(Keyword::Show),
++	UniCase::ascii("SID") => TokenKind::Keyword(Keyword::Sid),
+ 	UniCase::ascii("SIGNIN") => TokenKind::Keyword(Keyword::Signin),
+ 	UniCase::ascii("SIGNUP") => TokenKind::Keyword(Keyword::Signup),
+ 	UniCase::ascii("SINCE") => TokenKind::Keyword(Keyword::Since),
+diff --git a/surrealdb/core/src/syn/parser/stmt/define.rs b/surrealdb/core/src/syn/parser/stmt/define.rs
+index af7dcbf43..4c55ae057 100644
+--- a/surrealdb/core/src/syn/parser/stmt/define.rs
++++ b/surrealdb/core/src/syn/parser/stmt/define.rs
+@@ -21,8 +21,8 @@ use crate::sql::statements::define::{
+ };
+ use crate::sql::tokenizer::Tokenizer;
+ use crate::sql::{
+-	AccessType, DefineModuleStatement, Expr, Index, Kind, Literal, Param, Permission, Permissions,
+-	Scoring, TableType, access_type, table_type,
++	AccessType, DefineModuleStatement, Expr, IdGeneration, Index, Kind, Literal, Param, Permission,
++	Permissions, Scoring, TableType, access_type, table_type,
+ };
+ #[cfg(feature = "surrealism")]
+ use crate::sql::{ModuleExecutable, SiloExecutable, SurrealismExecutable};
+@@ -693,6 +693,25 @@ impl Parser<'_> {
+ 					self.pop_peek();
+ 					res.changefeed = Some(self.parse_changefeed()?);
+ 				}
++				t!("ID") => {
++					self.pop_peek();
++					let peek = self.peek();
++					match peek.kind {
++						t!("DEFAULT") => {
++							self.pop_peek();
++							res.id_generation = IdGeneration::Default;
++						}
++						t!("SID") => {
++							self.pop_peek();
++							res.id_generation = IdGeneration::Sid;
++						}
++						t!("RID") => {
++							self.pop_peek();
++							res.id_generation = IdGeneration::Rid;
++						}
++						_ => unexpected!(self, peek, "`DEFAULT`, `SID`, or `RID`"),
++					}
++				}
+ 				t!("AS") => {
+ 					self.pop_peek();
+ 					let peek = self.peek();
+diff --git a/surrealdb/core/src/syn/parser/test/stmt.rs b/surrealdb/core/src/syn/parser/test/stmt.rs
+index b9451fa7d..91fea8b38 100644
+--- a/surrealdb/core/src/syn/parser/test/stmt.rs
++++ b/surrealdb/core/src/syn/parser/test/stmt.rs
+@@ -1602,10 +1602,65 @@ fn parse_define_table() {
+ 			comment: Expr::Literal(Literal::None),
+ 
+ 			table_type: TableType::Normal,
++			id_generation: crate::sql::IdGeneration::default(),
+ 		})))
+ 	);
+ }
+ 
++#[test]
++fn parse_define_table_id_generation() {
++	use crate::sql::IdGeneration;
++
++	let cases = [
++		("DEFINE TABLE foo ID DEFAULT", IdGeneration::Default),
++		("DEFINE TABLE foo ID SID", IdGeneration::Sid),
++		("DEFINE TABLE foo ID RID", IdGeneration::Rid),
++		("DEFINE TABLE foo id sid", IdGeneration::Sid),
++	];
++	for (query, expected) in cases {
++		let res = syn::parse_with(query.as_bytes(), async |parser, stk| {
++			parser.parse_expr_inherit(stk).await
++		})
++		.unwrap_or_else(|e| panic!("parse failed for {query}: {e}"));
++		let Expr::Define(boxed) = res else {
++			panic!("expected DEFINE for {query}");
++		};
++		let DefineStatement::Table(stmt) = *boxed else {
++			panic!("expected DEFINE TABLE for {query}");
++		};
++		assert_eq!(stmt.id_generation, expected, "for query: {query}");
++	}
++}
++
++#[test]
++fn define_table_id_generation_ddl_roundtrip() {
++	use surrealdb_types::ToSql;
++
++	use crate::sql::IdGeneration;
++
++	// Sid and Rid round-trip through DDL emission and reparse. Default emits
++	// no clause (preserves upstream behavior).
++	for kind in [IdGeneration::Default, IdGeneration::Sid, IdGeneration::Rid] {
++		let original = DefineTableStatement {
++			name: Expr::Table("t".to_string()),
++			id_generation: kind,
++			..Default::default()
++		};
++		let ddl = original.to_sql();
++		let parsed = syn::parse_with(ddl.as_bytes(), async |parser, stk| {
++			parser.parse_expr_inherit(stk).await
++		})
++		.unwrap_or_else(|e| panic!("reparse failed for {kind:?}: ddl={ddl:?} err={e}"));
++		let Expr::Define(boxed) = parsed else {
++			panic!("expected DEFINE for {kind:?}");
++		};
++		let DefineStatement::Table(stmt) = *boxed else {
++			panic!("expected DEFINE TABLE for {kind:?}");
++		};
++		assert_eq!(stmt.id_generation, kind, "round-trip for {kind:?} via ddl={ddl:?}");
++	}
++}
++
+ #[test]
+ fn parse_define_event() {
+ 	let res = syn::parse_with(
+diff --git a/surrealdb/core/src/syn/parser/test/streaming.rs b/surrealdb/core/src/syn/parser/test/streaming.rs
+index fad950838..6036365b3 100644
+--- a/surrealdb/core/src/syn/parser/test/streaming.rs
++++ b/surrealdb/core/src/syn/parser/test/streaming.rs
+@@ -286,6 +286,7 @@ fn statements() -> Vec<TopLevelExpr> {
+ 			comment: Expr::Literal(Literal::None),
+ 
+ 			table_type: TableType::Normal,
++			id_generation: crate::sql::IdGeneration::default(),
+ 		})))),
+ 		TopLevelExpr::Expr(Expr::Define(Box::new(DefineStatement::Event(DefineEventStatement {
+ 			kind: DefineKind::Default,
+diff --git a/surrealdb/core/src/syn/token/keyword.rs b/surrealdb/core/src/syn/token/keyword.rs
+index 558ca79ae..0fb759a6f 100644
+--- a/surrealdb/core/src/syn/token/keyword.rs
++++ b/surrealdb/core/src/syn/token/keyword.rs
+@@ -1,7 +1,7 @@
+ macro_rules! keyword {
+ 	($($name:ident => $value:tt),* $(,)?) => {
+ 
+-		#[repr(u8)]
++		#[repr(u16)]
+ 		#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+ 		pub enum Keyword{
+ 			$($name,)*
+@@ -108,6 +108,7 @@ keyword! {
+ 	Headers => "HEADERS",
+ 	Highlights => "HIGHLIGHTS",
+ 	Hnsw => "HNSW",
++	Id => "ID",
+ 	Ignore => "IGNORE",
+ 	Include => "INCLUDE",
+ 	Index => "INDEX",
+@@ -170,6 +171,7 @@ keyword! {
+ 	Relate => "RELATE",
+ 	Relation => "RELATION",
+ 	Remove => "REMOVE",
++	Rid => "RID",
+ 	Replace => "REPLACE",
+ 	Retry => "RETRY",
+ 	Return => "RETURN",
+@@ -182,6 +184,7 @@ keyword! {
+ 	Scope => "SCOPE",
+ 	Select => "SELECT",
+ 	Sequence => "SEQUENCE",
++	Sid => "SID",
+ 	Session => "SESSION",
+ 	Set => "SET",
+ 	Show => "SHOW",
+diff --git a/surrealdb/core/src/syn/token/mod.rs b/surrealdb/core/src/syn/token/mod.rs
+index fbbe38bb2..c1caaf52e 100644
+--- a/surrealdb/core/src/syn/token/mod.rs
++++ b/surrealdb/core/src/syn/token/mod.rs
+@@ -404,7 +404,9 @@ impl fmt::Display for TokenKind {
+ }
+ 
+ /// An assertion statically checking the size of TokenKind.
+-const _TOKEN_KIND_SIZE_ASSERT: [(); 2] = [(); std::mem::size_of::<TokenKind>()];
++/// Grew from 2 to 4 bytes when Keyword was bumped to #[repr(u16)] in the
++/// fork (the >256 keyword cap was hit; see plans/okay-let-s-do-the-replicated-shell.md).
++const _TOKEN_KIND_SIZE_ASSERT: [(); 4] = [(); std::mem::size_of::<TokenKind>()];
+ 
+ impl TokenKind {
+ 	pub fn has_data(&self) -> bool {

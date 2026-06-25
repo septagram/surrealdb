@@ -1,0 +1,304 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index fee88fcb9..d58378f14 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -253,8 +253,14 @@ default = [
+     "surrealism",
+     "graphql",
+     "cli",
++    "server",
+ ]
+ 
++# Pulls the surrealdb-server `server` umbrella so the hosted-server build
++# of the binary stays complete after customware/002 moved embedded-first
++# defaults further down the stack.
++server = ["surrealdb-server/server"]
++auth = ["surrealdb-server/auth"]
+ allocator = ["surrealdb-server/allocator"]
+ allocation-tracking = ["surrealdb-server/allocation-tracking"]
+ http = ["surrealdb-server/http"]
+diff --git a/surrealdb/Cargo.toml b/surrealdb/Cargo.toml
+index ec7b6cf7b..fae99126e 100644
+--- a/surrealdb/Cargo.toml
++++ b/surrealdb/Cargo.toml
+@@ -14,8 +14,20 @@ categories.workspace = true
+ license-file.workspace = true
+ 
+ [features]
+-# Public features
+-default = ["protocol-ws", "rustls"]
++# Public features.
++#
++# customware/002 flips defaults to embedded-first: vanilla `cargo add surrealdb`
++# in this fork gets only `kv-mem` (no WebSocket client, no TLS, no graphql,
++# no auth). Anyone running this fork as a hosted server enables `server`
++# (and probably `protocol-ws,rustls` for client transports too).
++default = ["kv-mem"]
++# Pass-through for the surrealdb-core server umbrella — pulls auth, http,
++# jwks, graphql.
++server = ["surrealdb-core/server"]
++# Pass-through for the surrealdb-core auth feature — pulls jsonwebtoken
++# and the IAM credential pipeline. Embedded users who want DEFINE USER /
++# DEFINE ACCESS without the rest of `server` enable this directly.
++auth = ["surrealdb-core/auth"]
+ allocator = ["surrealdb-core/allocator"]
+ protocol-http = ["dep:reqwest", "surrealdb-types/reqwest"]
+ protocol-ws = ["dep:tokio-tungstenite", "tokio/time"]
+@@ -26,6 +38,8 @@ kv-tikv = ["surrealdb-core/kv-tikv", "tokio/time"]
+ kv-surrealkv = ["surrealdb-core/kv-surrealkv", "tokio/time"]
+ scripting = ["surrealdb-core/scripting"]
+ http = ["surrealdb-core/http"]
++graphql = ["surrealdb-core/graphql"]
++surrealism = ["surrealdb-core/surrealism"]
+ native-tls = [
+     "dep:native-tls",
+     "reqwest?/native-tls",
+@@ -122,7 +136,6 @@ env_logger.workspace = true
+ flate2.workspace = true
+ parking_lot.workspace = true
+ web-time.workspace = true
+-pprof = { workspace = true, features = ["flamegraph", "criterion"] }
+ radix_trie.workspace = true
+ rand.workspace = true
+ rayon.workspace = true
+@@ -137,6 +150,11 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ ulid = { workspace = true, features = ["serde"] }
+ wiremock.workspace = true
+ 
++# pprof's profiler relies on Unix-only libc types and does not compile on
++# Windows. Mirror of the same gate in `surrealdb/core/Cargo.toml`.
++[target.'cfg(unix)'.dev-dependencies]
++pprof = { workspace = true, features = ["flamegraph", "criterion"] }
++
+ [package.metadata.cargo-machete]
+ # Unused in our source; only needed so the derive is built with sdk-path
+ # for macro output (::surrealdb::types). Not exposed on surrealdb-types.
+diff --git a/surrealdb/core/Cargo.toml b/surrealdb/core/Cargo.toml
+index b6ecf4537..61732cb83 100644
+--- a/surrealdb/core/Cargo.toml
++++ b/surrealdb/core/Cargo.toml
+@@ -14,8 +14,18 @@ categories.workspace = true
+ license-file.workspace = true
+ 
+ [features]
+-# Public features
+-default = ["kv-mem", "graphql"]
++# Public features.
++#
++# `default` is intentionally lean (embedded-first per customware/002, D6).
++# Server / hosted SurrealDB builds enable `server` explicitly via the
++# `surrealdb-server` crate. Embedded library users get just `kv-mem` and
++# can layer on what they need with `--features ...`.
++default = ["kv-mem"]
++# Umbrella feature for hosted-server functionality. Pulls every subsystem
++# an HTTP/RPC SurrealDB server needs but an embedded library typically does
++# not. `surrealism` (WASM plugin runtime) is intentionally NOT included —
++# it's orthogonal and stays opt-in for both embedded and hosted users.
++server = ["http", "jwks", "auth", "graphql"]
+ kv-mem = [
+     "dep:surrealmx",
+     "tokio/time",
+@@ -42,7 +52,11 @@ kv-surrealkv = [
+ scripting = ["dep:js"]
+ http = ["dep:reqwest"]
+ ml = ["dep:surrealml-core"]
+-jwks = ["dep:reqwest"]
++# Gates the IAM credential pipeline (signin/signup/verify/issue/token/jwks)
++# and pulls jsonwebtoken. Without it, only Session::owner() works; DEFINE
++# USER / DEFINE ACCESS execute with an "unsupported" error.
++auth = ["dep:jsonwebtoken"]
++jwks = ["auth", "dep:reqwest"]
+ surrealism = ["dep:surrealism-runtime"]
+ allocator = ["dep:jemallocator", "dep:mimalloc"]
+ arbitrary = [
+@@ -180,7 +194,7 @@ mime = "0.3.17"
+ # WASM DEPENDENCY CONFIGURATION
+ [target.'cfg(target_family = "wasm")'.dependencies]
+ getrandom = { workspace = true, features = ["wasm_js"] }
+-jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
++jsonwebtoken = { workspace = true, features = ["rust_crypto"], optional = true }
+ ring = { workspace = true, features = ["wasm32_unknown_unknown_js"] }
+ surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers"] }
+ tokio = { workspace = true, default-features = false, features = [
+@@ -196,7 +210,7 @@ wasmtimer = { workspace = true, default-features = false, features = ["tokio"] }
+ # Note: surrealism-runtime is only available on non-WASM targets
+ # The surrealism feature will be enabled by default for non-WASM in the parent workspace
+ [target.'cfg(not(target_family = "wasm"))'.dependencies]
+-jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
++jsonwebtoken = { workspace = true, features = ["aws_lc_rs"], optional = true }
+ surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers", "rpc"] }
+ tokio = { workspace = true, default-features = false, features = [
+     "macros",
+diff --git a/surrealdb/core/src/err/mod.rs b/surrealdb/core/src/err/mod.rs
+index e27d012c3..4553e51e1 100644
+--- a/surrealdb/core/src/err/mod.rs
++++ b/surrealdb/core/src/err/mod.rs
+@@ -8,6 +8,7 @@ use base64::DecodeError as Base64Error;
+ use ext_sort::SortError;
+ use fst::Error as FstError;
+ use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
++#[cfg(feature = "auth")]
+ use jsonwebtoken::errors::Error as JWTError;
+ use object_store::Error as ObjectStoreError;
+ use revision::Error as RevisionError;
+@@ -1292,6 +1293,7 @@ impl From<Base64Error> for Error {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<JWTError> for Error {
+ 	fn from(_: JWTError) -> Error {
+ 		Error::InvalidAuth
+diff --git a/surrealdb/core/src/expr/algorithm.rs b/surrealdb/core/src/expr/algorithm.rs
+index 40415640c..522a73ab9 100644
+--- a/surrealdb/core/src/expr/algorithm.rs
++++ b/surrealdb/core/src/expr/algorithm.rs
+@@ -28,6 +28,7 @@ impl Algorithm {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<Algorithm> for jsonwebtoken::Algorithm {
+ 	fn from(val: Algorithm) -> Self {
+ 		match val {
+diff --git a/surrealdb/core/src/gql/mod.rs b/surrealdb/core/src/gql/mod.rs
+index 6cf507e2c..01c62f3eb 100644
+--- a/surrealdb/core/src/gql/mod.rs
++++ b/surrealdb/core/src/gql/mod.rs
+@@ -36,6 +36,7 @@
+ //! because `async_graphql` and the HTTP serving stack are not compatible with WASM.
+ #![cfg(not(target_family = "wasm"))]
+ 
++#[cfg(feature = "auth")]
+ mod auth;
+ pub mod cache;
+ pub mod error;
+diff --git a/surrealdb/core/src/gql/schema.rs b/surrealdb/core/src/gql/schema.rs
+index 72b7e51c1..cce0a53df 100644
+--- a/surrealdb/core/src/gql/schema.rs
++++ b/surrealdb/core/src/gql/schema.rs
+@@ -32,6 +32,7 @@ use rust_decimal::prelude::FromPrimitive;
+ use serde_json::Number;
+ use surrealdb_types::ToSql;
+ 
++#[cfg(feature = "auth")]
+ use super::auth::add_auth_mutations;
+ use super::error::{GqlError, resolver_error};
+ #[cfg(debug_assertions)]
+@@ -187,6 +188,7 @@ pub async fn generate_schema(
+ 	}
+ 
+ 	// Generate auth mutations (signIn/signUp) from access definitions
++	#[cfg(feature = "auth")]
+ 	{
+ 		let accesses = tx.all_db_accesses(db_def.namespace_id, db_def.database_id, None).await?;
+ 		if !accesses.is_empty() {
+diff --git a/surrealdb/core/src/iam/mod.rs b/surrealdb/core/src/iam/mod.rs
+index 14ae2a85e..3214570f6 100644
+--- a/surrealdb/core/src/iam/mod.rs
++++ b/surrealdb/core/src/iam/mod.rs
+@@ -1,7 +1,9 @@
++#[cfg(feature = "auth")]
+ use std::sync::Once;
+ 
+ pub use entities::Level;
+ use thiserror::Error;
++#[cfg(feature = "auth")]
+ pub use token::Token;
+ 
+ pub mod access;
+@@ -11,17 +13,23 @@ pub mod check;
+ pub mod clear;
+ pub mod entities;
+ pub(crate) mod file;
++#[cfg(feature = "auth")]
+ pub mod issue;
+ #[cfg(feature = "jwks")]
+ pub mod jwks;
+ pub mod reset;
++#[cfg(feature = "auth")]
+ pub mod signin;
++#[cfg(feature = "auth")]
+ pub mod signup;
++#[cfg(feature = "auth")]
+ pub mod token;
++#[cfg(feature = "auth")]
+ pub mod verify;
+ 
+ pub use self::auth::*;
+ pub use self::entities::*;
++#[cfg(feature = "auth")]
+ use crate::catalog;
+ 
+ #[derive(Error, Debug)]
+@@ -38,6 +46,7 @@ pub enum Error {
+ 	},
+ }
+ 
++#[cfg(feature = "auth")]
+ fn algorithm_to_jwt_algorithm(alg: catalog::Algorithm) -> jsonwebtoken::Algorithm {
+ 	match alg {
+ 		catalog::Algorithm::Hs256 => jsonwebtoken::Algorithm::HS256,
+diff --git a/surrealdb/core/src/kvs/ds.rs b/surrealdb/core/src/kvs/ds.rs
+index 956366008..cdc083c80 100644
+--- a/surrealdb/core/src/kvs/ds.rs
++++ b/surrealdb/core/src/kvs/ds.rs
+@@ -2514,7 +2514,7 @@ impl Datastore {
+ 	}
+ }
+ 
+-#[cfg(test)]
++#[cfg(all(test, feature = "auth"))]
+ mod test {
+ 	use super::*;
+ 	use crate::iam::verify::verify_root_creds;
+diff --git a/surrealdb/core/src/rpc/mod.rs b/surrealdb/core/src/rpc/mod.rs
+index 03126c842..545671407 100644
+--- a/surrealdb/core/src/rpc/mod.rs
++++ b/surrealdb/core/src/rpc/mod.rs
+@@ -1,6 +1,7 @@
+ mod args;
+ mod error;
+ mod method;
++#[cfg(feature = "auth")]
+ mod protocol;
+ mod response;
+ 
+@@ -14,6 +15,7 @@ pub use error::{
+ };
+ pub use format::Format;
+ pub use method::Method;
++#[cfg(feature = "auth")]
+ pub use protocol::RpcProtocol;
+ pub use request::Request;
+ pub use response::{DbResponse, DbResult, DbResultStats};
+diff --git a/surrealdb/core/src/sql/algorithm.rs b/surrealdb/core/src/sql/algorithm.rs
+index 56afef75e..f0384d74b 100644
+--- a/surrealdb/core/src/sql/algorithm.rs
++++ b/surrealdb/core/src/sql/algorithm.rs
+@@ -28,6 +28,7 @@ impl Algorithm {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<Algorithm> for jsonwebtoken::Algorithm {
+ 	fn from(val: Algorithm) -> Self {
+ 		match val {
+diff --git a/surrealdb/server/Cargo.toml b/surrealdb/server/Cargo.toml
+index d71b5eb5f..e1c888cc3 100644
+--- a/surrealdb/server/Cargo.toml
++++ b/surrealdb/server/Cargo.toml
+@@ -27,7 +27,13 @@ default = [
+     "surrealism",
+     "graphql",
+     "cli",
++    "server",
+ ]
++# Pulls the surrealdb-core `server` umbrella — auth + http + jwks + graphql.
++# This is what makes the hosted-server build complete after customware/002
++# moved embedded-first defaults.
++server = ["surrealdb-core/server", "surrealdb/server"]
++auth = ["surrealdb-core/auth", "surrealdb/auth"]
+ http = ["surrealdb-core/http"]
+ jwks = ["surrealdb-core/jwks"]
+ ml = ["surrealdb/ml"]
