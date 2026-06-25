@@ -30,7 +30,7 @@ env:
 jobs:
   bench:
     name: Nightly benchmark
-    runs-on: [self-hosted, benchmarking]
+    runs-on: runner-arm-bench
     if: ${{ github.repository == 'surrealdb/surrealdb-private' }} # Don't run outside the private repo
     timeout-minutes: 180
     steps:
