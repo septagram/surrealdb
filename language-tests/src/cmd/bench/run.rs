@@ -333,6 +333,12 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 					imp_fail.path, imp_fail.message
 				);
 			}
+			BenchRunResult::InsufficientSamples(collected) => {
+				println!(
+					"Skipping {}: collected only {collected} sample(s) within max_time (need at least 2 to compute statistics)",
+					i.name()
+				);
+			}
 			BenchRunResult::Ok(measurement, compare) => {
 				// Persist each result the moment its bench finishes, not in a trailing
 				// pass over the whole suite, so a run killed partway (job timeout,
@@ -510,6 +516,10 @@ pub fn builder_from_config(config: &TestConfig) -> Builder {
 enum BenchRunResult {
 	Import(ImportFailure),
 	Ok(MeasurementData, Option<ComparisonData>),
+	/// Too few samples were collected to compute statistics — a bench whose single
+	/// iteration exceeds `max_time` collects only one sample, and the stats need at
+	/// least two. Reported and skipped instead of panicking.
+	InsufficientSamples(usize),
 }
 
 /// The executable form of a bench case: raw SurrealQL source, a lowered OpenGQL
@@ -803,7 +813,13 @@ async fn run_bench(
 
 	bench_marker("__BENCH_MEASURE_END__");
 
-	let measurement = MeasurementData::from_iteration_times(iterations, samples);
+	// A bench whose single iteration exceeds `max_time` collects only one sample,
+	// which is too few for the statistics (they need at least two). Report it as
+	// skipped rather than panicking inside `Sample::new`.
+	let collected = samples.len();
+	let Some(measurement) = MeasurementData::from_iteration_times(iterations, samples) else {
+		return Ok(BenchRunResult::InsufficientSamples(collected));
+	};
 	let comp = baseline.map(|baseline| ComparisonData::compare(&baseline, &measurement));
 
 	Ok(BenchRunResult::Ok(measurement, comp))
