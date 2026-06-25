@@ -191,5 +191,7 @@ d85c5305 Parse DEFINE TABLE ... ID [default|sid|rid]
   `Transaction::scanr` and records scan metrics before returning raw keys.
 - The document pipeline keeps the `v3.1.5` permission/retry ordering; only the
   default record-id minting hook became async for Dorsid Sid warm-up.
+- Updated the `TableDefinition` catalog serialization fixture to expect 153
+  bytes with the revision-3 `id_generation` field.
 - Verified the reimplementation with
   `cargo check -p surrealdb-core --no-default-features --features kv-mem`.
