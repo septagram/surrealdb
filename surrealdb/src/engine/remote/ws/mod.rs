@@ -29,7 +29,6 @@ use crate::conn::{Command, RequestData, Route};
 use crate::engine::remote::RouterRequest;
 use crate::engine::{SessionError, session_error_to_error};
 use crate::opt::IntoEndpoint;
-use crate::opt::auth::Token;
 use crate::types::{Array, HashMap, Notification, Number, SurrealValue, Value};
 use crate::{Connect, Error, Surreal};
 

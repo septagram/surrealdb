@@ -285,23 +285,25 @@ index 56afef75e..f0384d74b 100644
  	fn from(val: Algorithm) -> Self {
  		match val {
 diff --git a/surrealdb/server/Cargo.toml b/surrealdb/server/Cargo.toml
-index 1f2af648a..5f10e01e5 100644
+index 1f2af648a..5e2b4077d 100644
 --- a/surrealdb/server/Cargo.toml
 +++ b/surrealdb/server/Cargo.toml
-@@ -27,7 +27,13 @@ default = [
+@@ -27,8 +27,14 @@ default = [
      "surrealism",
      "graphql",
      "cli",
 +    "server",
  ]
+-http = ["surrealdb-core/http"]
 +# Pulls the surrealdb-core `server` umbrella — auth + http + jwks + graphql.
 +# This is what makes the hosted-server build complete after customware/002
 +# moved embedded-first defaults.
 +server = ["surrealdb-core/server", "surrealdb/server"]
 +auth = ["surrealdb-core/auth", "surrealdb/auth"]
- http = ["surrealdb-core/http"]
++http = ["server"]
  jwks = ["surrealdb-core/jwks"]
  # Build against AWS-LC FIPS 3.0.x (NIST CMVP cert #4816).
+ # Restricts TLS to FIPS-approved cipher suites at runtime.
 diff --git a/surrealdb/src/conn/cmd.rs b/surrealdb/src/conn/cmd.rs
 index fe2264d1d..dd3a9e02b 100644
 --- a/surrealdb/src/conn/cmd.rs
@@ -655,10 +657,10 @@ index 21c7ed339..5d6791582 100644
  							if error.not_allowed_details().is_some_and(|a| {
  								matches!(a, NotAllowedError::Auth(AuthError::TokenExpired))
 diff --git a/surrealdb/src/engine/remote/mod.rs b/surrealdb/src/engine/remote/mod.rs
-index 269684227..465d762e7 100644
+index 269684227..947a22830 100644
 --- a/surrealdb/src/engine/remote/mod.rs
 +++ b/surrealdb/src/engine/remote/mod.rs
-@@ -102,10 +102,10 @@ pub mod http;
+@@ -102,7 +102,6 @@ pub mod http;
  #[cfg_attr(docsrs, doc(cfg(feature = "protocol-ws")))]
  pub mod ws;
  
@@ -666,11 +668,7 @@ index 269684227..465d762e7 100644
  use uuid::Uuid;
  
  use crate::conn::cmd::Command;
-+use crate::opt::auth::Token;
- use crate::types::{Array, SurrealValue, Value};
- 
- /// A struct which will be serialized as a map to behave like the previously
-@@ -172,13 +172,7 @@ impl Command {
+@@ -172,13 +171,7 @@ impl Command {
  				// Extract only the access token for authentication.
  				// If the token has a refresh component, we ignore it here
  				// as authentication only needs the access token.
@@ -686,7 +684,7 @@ index 269684227..465d762e7 100644
  				session_id,
  			},
 diff --git a/surrealdb/src/engine/remote/ws/mod.rs b/surrealdb/src/engine/remote/ws/mod.rs
-index 6a4b0cf68..9285fc9a8 100644
+index 6a4b0cf68..6d83c0bc5 100644
 --- a/surrealdb/src/engine/remote/ws/mod.rs
 +++ b/surrealdb/src/engine/remote/ws/mod.rs
 @@ -17,7 +17,6 @@ use std::time::Duration;
@@ -697,15 +695,7 @@ index 6a4b0cf68..9285fc9a8 100644
  use surrealdb_core::rpc::{DbResponse, DbResult};
  use surrealdb_types::{
  	AuthError, ConnectionError, Error as TypesError, NotAllowedError, SerializationError,
-@@ -30,6 +29,7 @@ use crate::conn::{Command, RequestData, Route};
- use crate::engine::remote::RouterRequest;
- use crate::engine::{SessionError, session_error_to_error};
- use crate::opt::IntoEndpoint;
-+use crate::opt::auth::Token;
- use crate::types::{Array, HashMap, Notification, Number, SurrealValue, Value};
- use crate::{Connect, Error, Surreal};
- 
-@@ -435,11 +435,10 @@ where
+@@ -435,11 +434,10 @@ where
  				token,
  				..
  			}) = pending.command

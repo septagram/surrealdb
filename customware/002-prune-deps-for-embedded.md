@@ -341,6 +341,7 @@ fcc1772b Add `server` umbrella feature and swap defaults          (customware/00
 
 - Reapplied the `auth`/`jwks` feature split and embedded-first defaults onto upstream `v3.1.5`.
 - Kept upstream's existing `surrealism = ["dep:surrealism-runtime", "dep:async-trait"]` feature wiring while restoring the customware `server`, `auth`, and `jwks` feature relationships.
+- Made `surrealdb-server/http` imply the hosted `server` umbrella, so `cargo check -p surrealdb-server --no-default-features --features storage-mem,http,scripting` remains a valid hosted-server check instead of compiling HTTP/RPC code with core auth and `RpcProtocol` gated out.
 - Updated the SDK command/router token carrier to use the public `surrealdb::opt::auth::Token` instead of `surrealdb_core::iam::Token`, because the core token type is now gated behind `feature = "auth"`.
 - Added embedded-router `#[cfg(feature = "auth")]` conversion helpers for local signin/signup/authenticate/refresh/revoke flows, with a clear query error when those auth-only operations are invoked from an auth-free embedded build.
 - Verification during reapplication: `cargo check -p surrealdb --no-default-features --features kv-mem` and `cargo check -p surrealdb --no-default-features --features kv-mem,auth` pass on this Windows host, with only pre-existing/upstream warnings.

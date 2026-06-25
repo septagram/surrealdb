@@ -105,7 +105,6 @@ pub mod ws;
 use uuid::Uuid;
 
 use crate::conn::cmd::Command;
-use crate::opt::auth::Token;
 use crate::types::{Array, SurrealValue, Value};
 
 /// A struct which will be serialized as a map to behave like the previously
