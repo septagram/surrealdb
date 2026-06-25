@@ -1000,7 +1000,7 @@ index f02bd86bd..f18c4aff7 100644
  					self.pop_peek();
  					let peek = self.peek();
 diff --git a/surrealdb/core/src/syn/parser/test/stmt.rs b/surrealdb/core/src/syn/parser/test/stmt.rs
-index 0a2682ed5..fc7cfade5 100644
+index 0a2682ed5..20703ab64 100644
 --- a/surrealdb/core/src/syn/parser/test/stmt.rs
 +++ b/surrealdb/core/src/syn/parser/test/stmt.rs
 @@ -44,9 +44,9 @@ use crate::sql::statements::{
@@ -1016,7 +1016,7 @@ index 0a2682ed5..fc7cfade5 100644
  };
  use crate::syn;
  use crate::syn::parser::ParserSettings;
-@@ -1607,6 +1607,7 @@ fn parse_define_table() {
+@@ -1607,12 +1607,34 @@ fn parse_define_table() {
  			comment: Expr::Literal(Literal::None),
  
  			table_type: TableType::Normal,
@@ -1024,6 +1024,33 @@ index 0a2682ed5..fc7cfade5 100644
  			graphql_alias: None,
  			graphql_deprecated: None,
  		})))
+ 	);
+ }
+ 
++#[test]
++fn parse_define_table_id_generation() {
++	fn parse_id_generation(input: &str) -> IdGeneration {
++		let res = syn::parse_with(input.as_bytes(), async |parser, stk| {
++			parser.parse_expr_inherit(stk).await
++		})
++		.unwrap();
++
++		if let Expr::Define(stmt) = res {
++			if let DefineStatement::Table(table) = *stmt {
++				return table.id_generation;
++			}
++		}
++		panic!("expected DEFINE TABLE statement");
++	}
++
++	assert_eq!(parse_id_generation("DEFINE TABLE foo ID DEFAULT"), IdGeneration::Default);
++	assert_eq!(parse_id_generation("DEFINE TABLE foo ID SID"), IdGeneration::Sid);
++	assert_eq!(parse_id_generation("DEFINE TABLE foo ID RID"), IdGeneration::Rid);
++}
++
+ #[test]
+ fn parse_define_event() {
+ 	let res = syn::parse_with(
 diff --git a/surrealdb/core/src/syn/parser/test/streaming.rs b/surrealdb/core/src/syn/parser/test/streaming.rs
 index 55cbcfc9f..d9657016a 100644
 --- a/surrealdb/core/src/syn/parser/test/streaming.rs

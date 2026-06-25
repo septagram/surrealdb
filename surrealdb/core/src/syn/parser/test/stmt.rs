@@ -1615,6 +1615,27 @@ fn parse_define_table() {
 }
 
 #[test]
+fn parse_define_table_id_generation() {
+	fn parse_id_generation(input: &str) -> IdGeneration {
+		let res = syn::parse_with(input.as_bytes(), async |parser, stk| {
+			parser.parse_expr_inherit(stk).await
+		})
+		.unwrap();
+
+		if let Expr::Define(stmt) = res {
+			if let DefineStatement::Table(table) = *stmt {
+				return table.id_generation;
+			}
+		}
+		panic!("expected DEFINE TABLE statement");
+	}
+
+	assert_eq!(parse_id_generation("DEFINE TABLE foo ID DEFAULT"), IdGeneration::Default);
+	assert_eq!(parse_id_generation("DEFINE TABLE foo ID SID"), IdGeneration::Sid);
+	assert_eq!(parse_id_generation("DEFINE TABLE foo ID RID"), IdGeneration::Rid);
+}
+
+#[test]
 fn parse_define_event() {
 	let res = syn::parse_with(
 		r#"DEFINE EVENT event ON TABLE table WHEN null THEN null,none ASYNC RETRY 5 MAXDEPTH 64"#
