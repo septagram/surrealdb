@@ -175,11 +175,13 @@ impl DatabaseMutation {
 }
 
 impl ChangeSet {
-	pub fn into_value(self) -> Value {
+	pub fn into_value(self) -> anyhow::Result<Value> {
 		let mut m = Object::default();
-		m.insert("versionstamp", Value::from(self.0));
+		// The versionstamp is a u128; convert it losslessly (erroring rather
+		// than truncating if it is ever too large to represent as a Number).
+		m.insert("versionstamp", Value::try_from(self.0)?);
 		m.insert("changes", self.1.into_value());
-		Value::Object(m)
+		Ok(Value::Object(m))
 	}
 }
 
@@ -221,7 +223,7 @@ mod tests {
 				],
 			)]),
 		);
-		let v = convert_value_to_public_value(cs.into_value()).unwrap().into_json_value();
+		let v = convert_value_to_public_value(cs.into_value().unwrap()).unwrap().into_json_value();
 		let s = serde_json::to_string(&v).unwrap();
 		assert_eq!(
 			s,
@@ -274,7 +276,7 @@ mod tests {
 				],
 			)]),
 		);
-		let v = convert_value_to_public_value(cs.into_value()).unwrap().into_json_value();
+		let v = convert_value_to_public_value(cs.into_value().unwrap()).unwrap().into_json_value();
 		let s = serde_json::to_string(&v).unwrap();
 		assert_eq!(
 			s,
