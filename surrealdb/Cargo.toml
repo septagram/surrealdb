@@ -157,6 +157,10 @@ name = "processor"
 harness = false
 
 [[bench]]
+name = "live_query_scaling"
+harness = false
+
+[[bench]]
 name = "hash_btree"
 harness = false
 

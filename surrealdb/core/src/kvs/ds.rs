@@ -46,7 +46,7 @@ use crate::catalog::providers::{
 };
 use crate::catalog::{ApiDefinition, Index, NodeLiveQuery, SubscriptionDefinition};
 use crate::cnf::dynamic::DynamicConfiguration;
-use crate::cnf::{CommonConfig, ConfigMap};
+use crate::cnf::{CommonConfig, ConfigMap, LiveQueryEngine};
 use crate::ctx::{CancelHandle, Context};
 #[cfg(feature = "jwks")]
 use crate::dbs::capabilities::NetTarget;
@@ -89,6 +89,7 @@ use crate::kvs::testing::{RetryableConflictSite, maybe_inject_retryable_conflict
 use crate::kvs::{
 	KVValue, LockType, NORMAL_BATCH_SIZE, TransactionType, is_retryable_transaction_conflict,
 };
+use crate::lq::LiveQueryRouter;
 use crate::observe::{ExecutionObserver, NoopObserver};
 #[cfg(feature = "opengql")]
 use crate::opengql::PreparedGqlQuery;
@@ -227,6 +228,10 @@ pub struct Datastore {
 	/// half of the notification channel internally). `None` disables live-query work entirely
 	/// at the executor boundary.
 	live_query_broker: Option<Arc<dyn MessageBroker>>,
+	/// Per-node live-query router state (the tail cursor over the `lqe`
+	/// keyspace). Only used when `config.live_query_engine` is `Router`, where
+	/// the router is the sole notification delivery path. See [`crate::lq`].
+	live_query_router: Arc<LiveQueryRouter>,
 	/// Public HTTP endpoint this datastore publishes on its `Node` catalog row so other
 	/// cluster members can route cross-node messages (e.g. live-query relay) to it.
 	/// `None` in deployments that don't expose such an endpoint.
@@ -982,6 +987,8 @@ impl Datastore {
 			transaction_timeout: self.transaction_timeout,
 			capabilities: Arc::clone(&self.capabilities),
 			live_query_broker: self.live_query_broker,
+			// Fresh router cursor: a restarted node re-establishes its baseline.
+			live_query_router: Arc::new(LiveQueryRouter::new()),
 			http_endpoint: self.http_endpoint,
 			index_stores: IndexStores::new(
 				self.config.hnsw_cache_size,
@@ -1030,6 +1037,8 @@ impl Datastore {
 			transaction_timeout: self.transaction_timeout,
 			capabilities: Arc::clone(&self.capabilities),
 			live_query_broker: self.live_query_broker.clone(),
+			// A fork models a separate node, so it gets its own router cursor.
+			live_query_router: Arc::new(LiveQueryRouter::new()),
 			http_endpoint: self.http_endpoint.clone(),
 			index_stores: IndexStores::new(
 				self.config.hnsw_cache_size,
@@ -2081,12 +2090,40 @@ impl Datastore {
 		trace!(target: TARGET, "Running changefeed garbage collection");
 		// Create a new transaction
 		let txn = self.transaction(Write, Optimistic).await?;
-		// Perform the garbage collection
+		// Perform the changefeed garbage collection
 		catch!(txn, crate::cf::gc_all_at(&lh, &txn).await);
+		// When the Router engine is active, also garbage-collect the dedicated
+		// live-query event keyspace, retaining entries for the configured window so
+		// reconnecting/lagging subscribers can still replay. This rides the same
+		// lease and transaction as the changefeed GC above.
+		if self.config.live_query_engine == LiveQueryEngine::Router {
+			catch!(
+				txn,
+				crate::lq::gc::gc_all_at(&lh, &txn, self.config.live_query_retention).await
+			);
+		}
 		// Commit the changes
 		catch!(txn, txn.commit().await);
 		// Everything ok
 		Ok(())
+	}
+
+	/// Run one live-query router pass.
+	///
+	/// Under the [`LiveQueryEngine::Router`] engine this tails the dedicated
+	/// `lqe` keyspace since the node's cursor and delivers notifications off the
+	/// write path (see [`crate::lq::router`]); it is the sole delivery path in
+	/// that mode. Under the default [`LiveQueryEngine::Inline`] engine it is a
+	/// cheap no-op, so the engine's background task can call it unconditionally.
+	/// Unlike changefeed GC this runs on every node without a lease: each node
+	/// delivers only to the subscriptions it owns.
+	#[instrument(level = "trace", target = "surrealdb::core::lq", skip(self))]
+	pub async fn live_query_router_process(&self) -> Result<()> {
+		// Only the Router engine delivers via the router.
+		if self.config.live_query_engine != LiveQueryEngine::Router {
+			return Ok(());
+		}
+		crate::lq::router::process(self, &self.live_query_router).await
 	}
 
 	// --------------------------------------------------

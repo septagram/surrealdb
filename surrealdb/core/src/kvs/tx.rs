@@ -68,6 +68,7 @@ use crate::kvs::{
 	BoxTimeStamp, BoxTimeStampImpl, Direction, Error as KvsError, KVKey, KVValue, Transactor,
 	cache, is_retryable_transaction_conflict,
 };
+use crate::lq::writer::LiveEventBuffer;
 use crate::observe::{
 	ExecutionObserver, Outcome, TenantIdentity, TransactionEvent, TransactionEventSafe,
 	TransactionMetrics,
@@ -122,6 +123,8 @@ pub struct Transaction {
 	sequences: Sequences,
 	/// The changefeed buffer.
 	changefeed: OnceLock<Changefeed>,
+	/// The live-query event buffer (dedicated keyspace, Router engine).
+	live_events: OnceLock<LiveEventBuffer>,
 	/// Async event trigger
 	async_event_trigger: Arc<Notify>,
 	/// Do we have to trigger async events after the commit?
@@ -779,6 +782,7 @@ impl Transaction {
 			cache: TransactionCache::new(config.transaction_cache_size),
 			sequences,
 			changefeed: OnceLock::new(),
+			live_events: OnceLock::new(),
 			async_event_trigger,
 			trigger_async_event: AtomicBool::new(false),
 			pending_index_build_reservations: Mutex::new(Vec::new()),
@@ -1049,6 +1053,10 @@ impl Transaction {
 		// Clear any buffered changefeed entries
 		if let Some(changefeed) = self.changefeed.get() {
 			changefeed.clear();
+		}
+		// Clear any buffered live-query events
+		if let Some(live_events) = self.live_events.get() {
+			live_events.clear();
 		}
 		// Cancel the underlying transactor. Emit a transaction event on
 		// either outcome so counters and durations are always reported
@@ -1844,6 +1852,38 @@ impl Transaction {
 		Ok(self.tr.timestamp().await.map_err(Error::from)?)
 	}
 
+	/// Get the current safe (closed) watermark timestamp — the versionstamp at or
+	/// below which every committed transaction is final and visible. The
+	/// live-query router uses this so it never advances past a commit that could
+	/// still become visible with a lower versionstamp. Defaults to
+	/// [`Self::timestamp`]; distributed backends override it.
+	pub async fn safe_timestamp(&self) -> Result<BoxTimeStamp> {
+		Ok(self.tr.safe_timestamp().await.map_err(Error::from)?)
+	}
+
+	/// Returns `true` if the table has at least one durable live-query
+	/// subscription row, read within this transaction's snapshot.
+	///
+	/// This is the Router-engine change-capture gate. It deliberately reads the
+	/// committed `key::table::lq` rows — the cluster-wide source of truth — rather
+	/// than any node-local in-memory cache: on a shared/replicated store the
+	/// per-node caches have no cross-node invalidation, so a cache could miss a
+	/// subscription created on another node and the write would fail to capture an
+	/// event that subscriber needs (a loss that can never be replayed). Reading
+	/// within the write's own snapshot makes the gate consistent and cluster-wide.
+	/// It is a limit-1 key scan, so the cost is independent of the subscriber
+	/// count on the table.
+	pub(crate) async fn table_has_live_query(
+		&self,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: &TableName,
+	) -> Result<bool> {
+		let beg = crate::key::table::lq::prefix(ns, db, tb)?;
+		let end = crate::key::table::lq::suffix(ns, db, tb)?;
+		Ok(!self.keys(beg..end, 1, 0, None).await?.is_empty())
+	}
+
 	/// Returns the implementation of timestamp that this transaction uses.
 	pub fn timestamp_impl(&self) -> BoxTimeStampImpl {
 		self.tr.timestamp_impl()
@@ -1890,6 +1930,29 @@ impl Transaction {
 		)
 	}
 
+	/// Records a record change into the dedicated live-query event buffer.
+	///
+	/// Independent of the changefeed: it always retains full before/after values
+	/// and is flushed to the `lqe` keyspace at commit (see [`Self::store_changes`]).
+	pub(crate) fn live_event_buffer_record_change(
+		&self,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: &TableName,
+		id: &RecordId,
+		previous: CursorRecord,
+		current: CursorRecord,
+	) {
+		self.live_events.get_or_init(LiveEventBuffer::new).buffer_record_change(
+			ns,
+			db,
+			tb,
+			id.clone(),
+			previous.into_owned(),
+			current.into_owned(),
+		)
+	}
+
 	/// complete_changes will complete the changefeed recording for the given
 	/// namespace and database.
 	///
@@ -1910,30 +1973,37 @@ impl Transaction {
 	/// only on backends with a coordinated oracle (TiKV TSO) — so cross-node changefeed ordering
 	/// is a property of the backend, not of this engine.
 	pub(crate) async fn store_changes(&self) -> Result<()> {
-		// If no changefeed writer, there are no changes
-		let Some(changefeed) = self.changefeed.get() else {
-			return Ok(());
+		// Gather buffered changefeed entries (if any).
+		let cf_changes = match self.changefeed.get() {
+			Some(changefeed) => changefeed.changes()?,
+			None => Vec::new(),
 		};
-		// Get the changes from the changefeed
-		let changes = changefeed.changes()?;
-		// For zero-length changes, return early
-		if changes.is_empty() {
+		// Gather buffered live-query events (if any).
+		let lqe_changes = match self.live_events.get() {
+			Some(live_events) => live_events.changes()?,
+			None => Vec::new(),
+		};
+		// Nothing buffered in either keyspace -> nothing to do.
+		if cf_changes.is_empty() && lqe_changes.is_empty() {
 			return Ok(());
 		}
-		// Get the current transaction timestamp
+		// Both keyspaces share this commit's versionstamp.
 		let buf = &mut [0u8; _];
 		let ts = self.timestamp().await?.encode(buf);
-		// Collect all changefeed write operations as futures
-		let futures = changes.into_iter().map(|(ns, db, tb, value)| async move {
-			// Create the changefeed key with the current timestamp
+		// Write the changefeed entries.
+		let cf_futures = cf_changes.into_iter().map(|(ns, db, tb, value)| async move {
 			let key = crate::key::change::new(ns, db, ts, &tb).encode_key()?;
-			// Write the changefeed entry using the raw transactor API
 			self.tr.set(key, value).await.map_err(Error::from)?;
-			// Everything succeeded
 			Ok::<(), anyhow::Error>(())
 		});
-		// Execute all write operations concurrently
-		try_join_all(futures).await?;
+		try_join_all(cf_futures).await?;
+		// Write the live-query event entries to the dedicated keyspace.
+		let lqe_futures = lqe_changes.into_iter().map(|(ns, db, tb, value)| async move {
+			let key = crate::key::lqe::new(ns, db, ts, &tb).encode_key()?;
+			self.tr.set(key, value).await.map_err(Error::from)?;
+			Ok::<(), anyhow::Error>(())
+		});
+		try_join_all(lqe_futures).await?;
 		// All good
 		Ok(())
 	}

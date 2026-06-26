@@ -1,6 +1,7 @@
 pub(crate) mod dynamic;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -173,6 +174,45 @@ pub trait Config: Default {
 	fn parse(&mut self, map: &ConfigMap);
 }
 
+/// Selects which live-query execution engine the datastore uses.
+///
+/// See [`crate::lq`] for the architecture. Defaults to [`LiveQueryEngine::Inline`]
+/// (the historical behaviour) so the new pipeline can be rolled out behind this
+/// flag without changing existing deployments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LiveQueryEngine {
+	/// Legacy engine: per-subscriber matching, permission checks, and projection
+	/// run inline on the mutator's transaction path before commit, so write cost
+	/// scales with the number of live subscribers on the written table.
+	#[default]
+	Inline,
+	/// Inverted engine: the mutator only persists before/after values, and a
+	/// per-node router performs per-subscriber matching off the write path, so
+	/// write throughput is independent of the subscriber count.
+	Router,
+}
+
+impl fmt::Display for LiveQueryEngine {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Inline => f.write_str("inline"),
+			Self::Router => f.write_str("router"),
+		}
+	}
+}
+
+impl FromStr for LiveQueryEngine {
+	type Err = String;
+
+	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+		match s.to_lowercase().as_str() {
+			"inline" => Ok(Self::Inline),
+			"router" => Ok(Self::Router),
+			v => Err(format!("Invalid live query engine: '{v}'. Expected 'inline' or 'router'")),
+		}
+	}
+}
+
 #[derive(Debug)]
 pub struct CommonConfig {
 	pub memory_threshold: usize,
@@ -330,6 +370,13 @@ pub struct CommonConfig {
 	/// Each pooled controller holds an instantiated WASM store. Effective pool size is
 	/// `min(this, module_config.max_pool_size.unwrap_or(this))`.
 	pub surrealism_log_level: String,
+	/// Selects the live-query execution engine (default: [`LiveQueryEngine::Inline`]).
+	pub live_query_engine: LiveQueryEngine,
+	/// Retention window for the dedicated live-query event keyspace (only used when
+	/// `live_query_engine` is `Router`). Sized to cover subscriber reconnect and
+	/// rolling-upgrade windows during which a subscriber may need to replay missed
+	/// events. Independent of any user-defined `CHANGEFEED` retention (default: 1h).
+	pub live_query_retention: Duration,
 }
 
 impl Default for CommonConfig {
@@ -384,6 +431,8 @@ impl Default for CommonConfig {
 			surrealism_max_fs_bytes: 100 * 1024 * 1024,
 			surrealism_max_pool_size: 8,
 			surrealism_log_level: "debug".to_string(),
+			live_query_engine: LiveQueryEngine::Inline,
+			live_query_retention: Duration::from_secs(3600),
 		}
 	}
 }
@@ -456,6 +505,10 @@ impl Config for CommonConfig {
 			.parse_key("surrealism_max_fs_bytes", &mut self.surrealism_max_fs_bytes)
 			.parse_key_with("surrealism_log_level", &mut self.surrealism_log_level, |s| {
 				Some(s.to_string())
+			})
+			.parse_key("live_query_engine", &mut self.live_query_engine)
+			.parse_key_with("live_query_retention", &mut self.live_query_retention, |x| {
+				crate::kvs::config::parse_duration(x).ok()
 			});
 	}
 }

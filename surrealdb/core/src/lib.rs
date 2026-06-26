@@ -35,6 +35,7 @@ mod exe;
 mod fmt;
 mod fnc;
 mod key;
+mod lq;
 #[doc(hidden)]
 pub mod str;
 #[cfg(feature = "surrealism")]

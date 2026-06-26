@@ -27,6 +27,17 @@ pub struct EngineOptions {
 	///
 	/// Default: 5 seconds
 	pub event_processing_interval: Duration,
+	/// Interval at which the per-node live-query router tails the dedicated
+	/// `lqe` keyspace and delivers notifications off the write path.
+	///
+	/// Only active when the live-query engine is `Router`; under the default
+	/// `Inline` engine the task is a cheap no-op. This is a poll-based delivery
+	/// cadence, so it bounds steady-state notification latency — kept short by
+	/// default. (A commit-driven hot path that removes the poll latency is
+	/// planned; this interval remains the durable backstop.)
+	///
+	/// Default: 100 milliseconds
+	pub live_query_router_interval: Duration,
 	/// Interval for the background reclaim of tombstoned namespace/database/
 	/// index data.
 	///
@@ -92,6 +103,7 @@ impl Default for EngineOptions {
 			changefeed_gc_interval: Duration::from_secs(30),
 			index_compaction_interval: Duration::from_secs(5),
 			event_processing_interval: Duration::from_secs(5),
+			live_query_router_interval: Duration::from_millis(100),
 			reclaim_interval: Duration::from_secs(60),
 			reclaim_grace: Duration::from_secs(600),
 			tikv_gc_interval: Duration::from_secs(600),
@@ -126,6 +138,11 @@ impl EngineOptions {
 
 	pub fn with_event_processing_interval(mut self, interval: Duration) -> Self {
 		self.event_processing_interval = interval;
+		self
+	}
+
+	pub fn with_live_query_router_interval(mut self, interval: Duration) -> Self {
+		self.live_query_router_interval = interval;
 		self
 	}
 

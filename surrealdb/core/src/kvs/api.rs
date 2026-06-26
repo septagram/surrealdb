@@ -1035,6 +1035,26 @@ pub trait Transactable: requirements::TransactionRequirements {
 		})
 	}
 
+	/// Get the current *safe* (closed) watermark timestamp: a versionstamp at or
+	/// below which every committed transaction is final **and** visible on this
+	/// node.
+	///
+	/// The live-query router uses this as the upper bound of what it delivers in
+	/// a pass, and as the bound it advances its cursor to, so it never advances
+	/// past a commit that could still become visible later with a lower
+	/// versionstamp (which would silently drop that notification).
+	///
+	/// The default returns [`Self::timestamp`], which is correct for any backend
+	/// with a single monotonic oracle and synchronous local visibility (mem,
+	/// rocksdb, surrealkv): everything below a freshly minted stamp is already
+	/// committed and visible. A distributed backend whose commit log is
+	/// non-linear (e.g. SurrealDS, where the highest committed timestamp can
+	/// float above an unapplied lower one) MUST override this to return a genuine
+	/// closed/safe watermark, or the router can miss notifications.
+	fn safe_timestamp(&self) -> BoxFut<'_, Result<BoxTimeStamp>> {
+		self.timestamp()
+	}
+
 	/// Get a handle to the timestamp implementation used by [`Self::timestamp`].
 	///
 	/// Mirrors the same `cfg(test)` swap: deterministic incrementing counter

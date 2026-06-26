@@ -544,6 +544,13 @@ impl Transactor {
 		self.inner.timestamp().await
 	}
 
+	/// Get the current safe (closed) watermark timestamp — the versionstamp at or
+	/// below which every committed transaction is final and visible. Defaults to
+	/// the monotonic timestamp; distributed backends override it.
+	pub async fn safe_timestamp(&self) -> Result<BoxTimeStamp> {
+		self.inner.safe_timestamp().await
+	}
+
 	/// Returns the implementation of timestamp that this transaction uses.
 	pub fn timestamp_impl(&self) -> BoxTimeStampImpl {
 		self.inner.timestamp_impl()

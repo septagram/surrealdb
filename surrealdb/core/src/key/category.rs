@@ -192,6 +192,8 @@ pub enum Category {
 	///
 	/// crate::key::change                   /*{ns}*{db}#{ts}
 	ChangeFeed,
+	/// crate::key::lqe                      /*{ns}*{db}%{ts}
+	LiveQueryEvent,
 	///
 	/// ------------------------------
 	///
@@ -283,6 +285,7 @@ impl Display for Category {
 			Self::IndexPrimaryAppending => "IndexPrimaryAppending",
 			Self::Index => "Index",
 			Self::ChangeFeed => "ChangeFeed",
+			Self::LiveQueryEvent => "LiveQueryEvent",
 			Self::Record => "Record",
 			Self::Graph => "Graph",
 			Self::Ref => "Ref",
