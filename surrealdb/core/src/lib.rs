@@ -63,6 +63,7 @@ pub mod observe;
 #[cfg(feature = "opengql")]
 pub mod opengql;
 pub mod options;
+pub mod rnd;
 pub mod rpc;
 pub mod sql;
 pub mod syn;

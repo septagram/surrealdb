@@ -625,6 +625,19 @@ impl BenchStatement {
 	}
 }
 
+/// Seed used to make benchmark datasets deterministic. Each dataset build
+/// reseeds the engine RNG (see `surrealdb_core::rnd`) so `rand::*` values and
+/// `|record:N|` ids are identical across runs and independent of benchmark
+/// order. Override with `SURREAL_RAND_SEED` to sanity-check results against a
+/// different, but still fixed, dataset draw.
+fn dataset_seed() -> u64 {
+	const DEFAULT_DATASET_SEED: u64 = 0x5EED_B0A7;
+	std::env::var("SURREAL_RAND_SEED")
+		.ok()
+		.and_then(|s| s.parse::<u64>().ok())
+		.unwrap_or(DEFAULT_DATASET_SEED)
+}
+
 /// Builds a fresh in-memory datastore, runs the bench's imports, and performs
 /// index compaction so the datastore is ready to execute the timed statement.
 ///
@@ -643,6 +656,12 @@ async fn prepare(
 
 	let session =
 		util::session_from_test_config(&run.case.test.config.parsed, config.new_planner.into());
+
+	// Reseed the engine RNG before populating the dataset so generated data is
+	// identical on every build and independent of benchmark order, making
+	// nightly run-to-run comparisons reflect code changes rather than the luck
+	// of the dataset draw.
+	surrealdb_core::rnd::reseed(dataset_seed());
 
 	// Use the per-variant dataset import chain (from `[bench].datasets`) when one
 	// was selected, otherwise fall back to the bench's own resolved imports.
