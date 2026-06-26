@@ -24,21 +24,25 @@ use rand::rngs::StdRng;
 /// default (inactive) path can skip touching the shared RNG entirely.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// The shared seeded RNG. Only locked when [`ACTIVE`] is set. The seed is read
-/// once from `SURREAL_RAND_SEED`; its absence leaves [`ACTIVE`] unset and this
-/// RNG untouched unless [`reseed`] is called.
-static SEEDED: LazyLock<Mutex<StdRng>> = LazyLock::new(|| {
-	match std::env::var("SURREAL_RAND_SEED").ok().and_then(|s| s.parse::<u64>().ok()) {
-		Some(seed) => {
-			ACTIVE.store(true, Ordering::Relaxed);
-			Mutex::new(StdRng::seed_from_u64(seed))
-		}
-		None => Mutex::new(StdRng::seed_from_u64(0)),
+/// The shared seeded RNG. Only locked when [`ACTIVE`] is set. The seed comes from
+/// [`crate::cnf::RAND_SEED`] (read once from `SURREAL_RAND_SEED`); its absence
+/// leaves [`ACTIVE`] unset and this RNG untouched unless [`reseed`] is called.
+static SEEDED: LazyLock<Mutex<StdRng>> = LazyLock::new(|| match *crate::cnf::RAND_SEED {
+	Some(seed) => {
+		ACTIVE.store(true, Ordering::Relaxed);
+		Mutex::new(StdRng::seed_from_u64(seed))
 	}
+	None => Mutex::new(StdRng::seed_from_u64(0)),
 });
 
 /// Run `f` with the active RNG: the seeded RNG when deterministic mode is on,
 /// otherwise the per-thread RNG. The inactive path takes no lock.
+///
+/// `#[inline]` lets the compiler inline the inactive branch into hot callers
+/// (notably [`crate::val::RecordIdKey::rand`], used for every default record id)
+/// and devirtualize the `&mut dyn RngCore` back to the concrete per-thread RNG,
+/// so the default path keeps its monomorphized draw with no dynamic dispatch.
+#[inline]
 pub fn with_rng<T>(f: impl FnOnce(&mut dyn rand::RngCore) -> T) -> T {
 	// Force the one-time seed read so `ACTIVE` reflects `SURREAL_RAND_SEED`.
 	LazyLock::force(&SEEDED);
@@ -64,8 +68,25 @@ mod tests {
 
 	use super::*;
 
+	// `#[serial]` keeps this off the same thread as other serial tests; the
+	// `Restore` guard below handles the rest. Activating deterministic mode flips
+	// process-global state that every `rand::*` draw and record-id generation
+	// reads, so this test must not run concurrently with code that draws random
+	// data, and must hand that state back even if an assertion panics.
 	#[test]
+	#[serial_test::serial]
 	fn reseed_makes_output_deterministic() {
+		// Restore deterministic mode to its prior state on every exit — including
+		// an assertion panic — so a failure here can't leave the shared test
+		// process drawing every record id and `rand::*` value from the seeded RNG.
+		struct Restore(bool);
+		impl Drop for Restore {
+			fn drop(&mut self) {
+				ACTIVE.store(self.0, Ordering::Relaxed);
+			}
+		}
+		let _restore = Restore(ACTIVE.load(Ordering::Relaxed));
+
 		// Two equal reseeds must yield identical sequences across every kind of
 		// draw the data generators use.
 		fn draw() -> (Vec<u64>, Vec<f64>, String) {
@@ -86,9 +107,5 @@ mod tests {
 		reseed(43);
 		let third = draw();
 		assert_ne!(first, third);
-
-		// Restore the default (unseeded) path so this test does not leave the
-		// shared test process in deterministic mode for other tests.
-		ACTIVE.store(false, Ordering::Relaxed);
 	}
 }

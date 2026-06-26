@@ -629,13 +629,11 @@ impl BenchStatement {
 /// reseeds the engine RNG (see `surrealdb_core::rnd`) so `rand::*` values and
 /// `|record:N|` ids are identical across runs and independent of benchmark
 /// order. Override with `SURREAL_RAND_SEED` to sanity-check results against a
-/// different, but still fixed, dataset draw.
+/// different, but still fixed, dataset draw; the variable is parsed once by
+/// `surrealdb_core::cnf::RAND_SEED` (which warns on a malformed value).
 fn dataset_seed() -> u64 {
 	const DEFAULT_DATASET_SEED: u64 = 0x5EED_B0A7;
-	std::env::var("SURREAL_RAND_SEED")
-		.ok()
-		.and_then(|s| s.parse::<u64>().ok())
-		.unwrap_or(DEFAULT_DATASET_SEED)
+	surrealdb_core::cnf::RAND_SEED.unwrap_or(DEFAULT_DATASET_SEED)
 }
 
 /// Builds a fresh in-memory datastore, runs the bench's imports, and performs

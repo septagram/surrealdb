@@ -494,6 +494,31 @@ pub static HNSW_BUILD_SEED: LazyLock<Option<u64>> = LazyLock::new(|| {
 	std::env::var("SURREAL_HNSW_BUILD_SEED").ok().and_then(|s| s.parse::<u64>().ok())
 });
 
+/// Optional fixed seed for the deterministic data-generation RNG (see
+/// `crate::rnd`).
+///
+/// Unset (the default) leaves `rand::*` and generated record ids drawing from
+/// the per-thread RNG, exactly as in production. Set `SURREAL_RAND_SEED=<u64>`
+/// to route them through a single seeded RNG so benchmark datasets are identical
+/// across runs. TEST AND BENCHMARK USE ONLY — never set it on a shared or
+/// multi-tenant deployment, where it makes record ids and `rand::*` values
+/// predictable process-wide.
+///
+/// Read once at first use, like the other knobs here. A value that is set but
+/// not a valid `u64` is reported via `tracing::warn!` and ignored, rather than
+/// silently falling back to the default.
+pub static RAND_SEED: LazyLock<Option<u64>> =
+	LazyLock::new(|| match std::env::var("SURREAL_RAND_SEED") {
+		Ok(v) => match v.parse::<u64>() {
+			Ok(seed) => Some(seed),
+			Err(_) => {
+				warn!("Ignoring invalid SURREAL_RAND_SEED value `{v}`; expected a u64");
+				None
+			}
+		},
+		Err(_) => None,
+	});
+
 /// Initial (and minimum) window size for the DiskANN filtered-KNN record
 /// prefetch. The committed-graph search prefetches candidate records in
 /// distance-ascending windows that grow geometrically (doubling, capped by
