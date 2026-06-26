@@ -423,19 +423,38 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 				// (job timeout, runner eviction, panic) keeps every completed group
 				// instead of discarding the lot. Non-fatal: a transient store error
 				// must not sink an otherwise-good run.
-				for (run, (measurement, compare)) in group.iter().zip(results) {
-					if cfg.save
-						&& let Err(e) = store
-							.add(BenchMarkRun {
-								measurement: measurement.clone(),
-								path: run.name(),
-								backend: cfg.backend,
-							})
-							.await
-					{
-						eprintln!("Warning: could not store measurement for {}: {e:#}", run.name());
+				for (run, result) in group.iter().zip(results) {
+					match result {
+						BenchRunResult::Import(imp_fail) => {
+							println!(
+								"Error, import `{}` returned an error: {}",
+								imp_fail.path, imp_fail.message
+							);
+						}
+						BenchRunResult::InsufficientSamples(collected) => {
+							println!(
+								"Skipping {}: collected only {collected} sample(s) within max_time (need at least 2 to compute statistics)",
+								run.name()
+							);
+						}
+						BenchRunResult::Ok(measurement, compare) => {
+							if cfg.save
+								&& let Err(e) = store
+									.add(BenchMarkRun {
+										measurement: measurement.clone(),
+										path: run.name(),
+										backend: cfg.backend,
+									})
+									.await
+							{
+								eprintln!(
+									"Warning: could not store measurement for {}: {e:#}",
+									run.name()
+								);
+							}
+							measurements.push((run.name(), measurement, compare));
+						}
 					}
-					measurements.push((run.name(), measurement, compare));
 				}
 			}
 		}
@@ -497,7 +516,7 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 			BenchRunResult::InsufficientSamples(collected) => {
 				println!(
 					"Skipping {}: collected only {collected} sample(s) within max_time (need at least 2 to compute statistics)",
-					i.name()
+					run.name()
 				);
 			}
 			BenchRunResult::Ok(measurement, compare) => {
@@ -861,8 +880,10 @@ async fn prepare(
 enum GroupOutcome {
 	/// Building/populating the group's shared dataset failed.
 	ImportFailed(ImportFailure),
-	/// Per-member `(measurement, comparison)`, in group order.
-	Ran(Vec<(MeasurementData, Option<ComparisonData>)>),
+	/// Per-member result, in group order. Each is `Ok` or `InsufficientSamples`;
+	/// a grouped read-only bench imports nothing of its own, so it cannot fail to
+	/// import.
+	Ran(Vec<BenchRunResult>),
 }
 
 /// Builds the group's dataset once, then runs every read-only bench in the group
@@ -884,14 +905,11 @@ async fn run_group(
 		Err(e) => return Ok(GroupOutcome::ImportFailed(e)),
 	};
 
+	// Each member runs against the shared `dbs`; its per-bench result (`Ok` or
+	// `InsufficientSamples`) is returned to `run()` for storing/printing.
 	let mut results = Vec::with_capacity(group.len());
 	for (run, baseline) in group.iter().zip(baselines) {
-		match run_bench(run, config, baseline, Some(dbs.clone())).await? {
-			BenchRunResult::Ok(measurement, compare) => results.push((measurement, compare)),
-			// A grouped read-only bench imports nothing of its own, so it cannot
-			// surface an import failure; treat one defensively as a group failure.
-			BenchRunResult::Import(e) => return Ok(GroupOutcome::ImportFailed(e)),
-		}
+		results.push(run_bench(run, config, baseline, Some(dbs.clone())).await?);
 	}
 
 	Ok(GroupOutcome::Ran(results))
