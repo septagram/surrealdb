@@ -60,6 +60,10 @@ use tower_http::sensitive_headers::{
 };
 use tower_http::trace::TraceLayer;
 
+/// Re-exported so an edition overriding `/ready` can reuse the community
+/// readiness decision; pair it with [`community_router`] to omit the built-in
+/// `/ready` route.
+pub use self::ready::community_readiness;
 use crate::cli::Config;
 use crate::cnf;
 use crate::ntw::signals::graceful_shutdown;
@@ -131,35 +135,57 @@ pub trait RouterFactory: TransactionBuilderFactory {
 /// composer to customize routes.
 impl RouterFactory for CommunityComposer {
 	fn configure_router(_router_state: Self::RouterState) -> Router<Arc<RpcState>> {
-		let router = Router::<Arc<RpcState>>::new()
-			// Redirect until we provide a UI
-			.route("/", get(|| async { Redirect::temporary(cnf::APP_ENDPOINT) }))
-			.route("/status", get(|| async {}))
-			.merge(health::router())
-			.merge(ready::router())
-			.merge(export::router())
-			.merge(import::router())
-			.merge(rpc::router())
-			.merge(version::router())
-			.merge(sync::router())
-			.merge(sql::router())
-			.merge(signin::router())
-			.merge(signup::router())
-			.merge(key::router())
-			.merge(ml::router())
-			.merge(api::router());
-
-		#[cfg(feature = "graphql")]
-		let router = router.merge(gql::router());
-
-		#[cfg(feature = "opengql")]
-		let router = router.merge(opengql::router());
-
-		#[cfg(feature = "mcp")]
-		let router = router.merge(mcp::router());
-
-		router
+		community_router(&[])
 	}
+}
+
+/// Build the community HTTP router, omitting any path in `exclude` so an edition
+/// can register its own handler for that path without an axum merge collision
+/// (axum panics on a duplicate `(path, method)`). Pass `&[]` for the standard
+/// community router — [`CommunityComposer::configure_router`] does exactly that.
+///
+/// `/ready` is the route intended to be overridable this way: an edition that
+/// layers an extra serve-readiness condition builds `community_router(&["/ready"])`,
+/// then merges its own `/ready` that calls [`community_readiness`] and ANDs in
+/// its condition.
+pub fn community_router(exclude: &[&str]) -> Router<Arc<RpcState>> {
+	let mut router = Router::<Arc<RpcState>>::new()
+		// Redirect until we provide a UI
+		.route("/", get(|| async { Redirect::temporary(cnf::APP_ENDPOINT) }))
+		.route("/status", get(|| async {}))
+		.merge(health::router());
+	if !exclude.contains(&"/ready") {
+		router = router.merge(ready::router());
+	}
+	router = router
+		.merge(export::router())
+		.merge(import::router())
+		.merge(rpc::router())
+		.merge(version::router())
+		.merge(sync::router())
+		.merge(sql::router())
+		.merge(signin::router())
+		.merge(signup::router())
+		.merge(key::router())
+		.merge(ml::router())
+		.merge(api::router());
+
+	#[cfg(feature = "graphql")]
+	{
+		router = router.merge(gql::router());
+	}
+
+	#[cfg(feature = "opengql")]
+	{
+		router = router.merge(opengql::router());
+	}
+
+	#[cfg(feature = "mcp")]
+	{
+		router = router.merge(mcp::router());
+	}
+
+	router
 }
 
 ///

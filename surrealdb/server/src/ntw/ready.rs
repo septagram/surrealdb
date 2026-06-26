@@ -28,6 +28,19 @@ where
 }
 
 async fn ready_handler(Extension(state): Extension<AppState>) -> Result<(), NetError> {
+	community_readiness(&state).await
+}
+
+/// The community readiness decision behind the `/ready` route, exposed so an
+/// edition that overrides `/ready` can reuse it for the community half of its
+/// own check.
+///
+/// Returns `Ok(())` once the deferred startup work (import + credentials) has
+/// completed and, when a heartbeat budget is configured, the current node's
+/// cluster heartbeat is fresh. Returns `Err(NotReady)` while still starting up
+/// or when the heartbeat is stale, and `Err(InvalidStorage)` if the heartbeat
+/// cannot be read.
+pub async fn community_readiness(state: &AppState) -> Result<(), NetError> {
 	// Not ready until the deferred startup work has completed.
 	if !state.readiness.ready.load(Ordering::SeqCst) {
 		return Err(NetError::NotReady);
