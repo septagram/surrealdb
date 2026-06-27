@@ -183,7 +183,7 @@ impl DefineFieldStatement {
 		self.disallow_mismatched_types(ctx, ns, db, &definition).await?;
 
 		// Validate id field restrictions
-		self.validate_id_restrictions(&definition)?;
+		validate_id_field_restrictions(&definition)?;
 
 		// Validate FLEXIBLE restrictions
 		self.validate_flexible_restrictions(ctx, ns, db, &definition).await?;
@@ -611,51 +611,6 @@ impl DefineFieldStatement {
 		Ok(())
 	}
 
-	pub(crate) fn validate_id_restrictions(
-		&self,
-		definition: &catalog::FieldDefinition,
-	) -> Result<()> {
-		if definition.name.is_id() {
-			// Ensure no `VALUE` clause is specified
-			ensure!(self.value.is_none(), Error::IdFieldKeywordConflict("VALUE".into()));
-
-			// Ensure no `REFERENCE` clause is specified
-			ensure!(self.reference.is_none(), Error::IdFieldKeywordConflict("REFERENCE".into()));
-
-			// Ensure no `COMPUTED` clause is specified
-			ensure!(self.computed.is_none(), Error::IdFieldKeywordConflict("COMPUTED".into()));
-
-			// A `DEFAULT` clause is allowed on the `id` field (it supplies the
-			// record id when none is given), but `DEFAULT ALWAYS` is not: the
-			// id is immutable, so recomputing it on every update is nonsensical.
-			ensure!(
-				!matches!(self.default, DefineDefault::Always(_)),
-				Error::IdFieldKeywordConflict("DEFAULT ALWAYS".into())
-			);
-
-			// Ensure no `ASSERT` clause is specified. The id is constrained by
-			// its TYPE at key-generation time; an ASSERT here would bind
-			// `$value` to the whole record id rather than the key, so its
-			// behaviour would be misleading. Forbid it for clarity.
-			ensure!(self.assert.is_none(), Error::IdFieldKeywordConflict("ASSERT".into()));
-
-			// Ensure the field is neither `READONLY` (the id is implicitly
-			// immutable) nor `FLEXIBLE` (meaningless on a record id key).
-			ensure!(!self.readonly, Error::IdFieldKeywordConflict("READONLY".into()));
-			ensure!(!self.flexible, Error::IdFieldKeywordConflict("FLEXIBLE".into()));
-
-			// Ensure the field is not a record type
-			if let Some(ref kind) = self.field_kind {
-				ensure!(
-					RecordIdKeyLit::kind_supported(kind),
-					Error::IdFieldUnsupportedKind(kind.to_sql())
-				);
-			}
-		}
-
-		Ok(())
-	}
-
 	pub(crate) async fn validate_flexible_restrictions(
 		&self,
 		ctx: &FrozenContext,
@@ -706,6 +661,42 @@ impl DefineFieldStatement {
 /// `old` could reference but `new` cannot are scanned. This runs on rare DDL,
 /// so scanning the candidate target ranges is acceptable and avoids
 /// maintaining a reverse index.
+/// Enforce the clauses that are not permitted on the `id` field. Shared by
+/// DEFINE FIELD and ALTER FIELD so both reject the same set on `id`: `VALUE`,
+/// `REFERENCE`, `COMPUTED`, `DEFAULT ALWAYS`, `READONLY`, `FLEXIBLE`, and any
+/// `TYPE` that is not a valid record-id key kind.
+///
+/// A plain `DEFAULT` and an `ASSERT` are allowed: both are applied to the
+/// record-id key at key-generation time in `Document::generate_record_id`
+/// (the `ASSERT` binds the key to `$key`). Operates on the catalog definition
+/// so DEFINE and ALTER validate the same resolved state.
+pub(crate) fn validate_id_field_restrictions(def: &catalog::FieldDefinition) -> Result<()> {
+	if !def.name.is_id() {
+		return Ok(());
+	}
+	// `VALUE`, `REFERENCE`, and `COMPUTED` are meaningless or unsafe on an
+	// immutable primary key.
+	ensure!(def.value.is_none(), Error::IdFieldKeywordConflict("VALUE".into()));
+	ensure!(def.reference.is_none(), Error::IdFieldKeywordConflict("REFERENCE".into()));
+	ensure!(def.computed.is_none(), Error::IdFieldKeywordConflict("COMPUTED".into()));
+	// A plain `DEFAULT` supplies the id when none is given; `DEFAULT ALWAYS`
+	// would recompute it on every update, which is nonsensical for an
+	// immutable id.
+	ensure!(
+		!matches!(def.default, catalog::DefineDefault::Always(_)),
+		Error::IdFieldKeywordConflict("DEFAULT ALWAYS".into())
+	);
+	// The id is implicitly immutable (`READONLY` is redundant) and a record-id
+	// key is not an object (`FLEXIBLE` is meaningless).
+	ensure!(!def.readonly, Error::IdFieldKeywordConflict("READONLY".into()));
+	ensure!(!def.flexible, Error::IdFieldKeywordConflict("FLEXIBLE".into()));
+	// The declared `TYPE` must be representable as a record-id key.
+	if let Some(ref kind) = def.field_kind {
+		ensure!(RecordIdKeyLit::kind_supported(kind), Error::IdFieldUnsupportedKind(kind.to_sql()));
+	}
+	Ok(())
+}
+
 pub(crate) async fn purge_dropped_reference_keys(
 	txn: &Transaction,
 	ns: NamespaceId,

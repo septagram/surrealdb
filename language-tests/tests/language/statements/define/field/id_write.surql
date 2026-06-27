@@ -79,9 +79,6 @@ error = "Cannot execute CREATE statement using value: uid_t:1..5"
 error = "Cannot execute CREATE statement using value: plain_t:1..5"
 
 [[test.results]]
-error = "Cannot use the `ASSERT` keyword on the `id` field."
-
-[[test.results]]
 error = "Cannot use the `READONLY` keyword on the `id` field."
 
 [[test.results]]
@@ -145,6 +142,5 @@ CREATE plain_t:1..5;
 -- ------------------------------------------------------------
 -- Forbidden clauses on the `id` field
 -- ------------------------------------------------------------
-DEFINE FIELD id ON bad_t ASSERT $value != NONE;
 DEFINE FIELD id ON bad_t READONLY;
 DEFINE FIELD id ON bad_t TYPE object FLEXIBLE;

@@ -12,6 +12,7 @@ use crate::err::Error;
 use crate::expr::data::Data;
 use crate::expr::paths::{ID, IN, OUT};
 use crate::expr::{AssignOperator, FlowResultExt, Idiom, Kind, KindLiteral, Part};
+use crate::iam::AuthLimit;
 use crate::val::{RecordId, RecordIdKey, TableName, Value};
 
 impl Document {
@@ -44,6 +45,17 @@ impl Document {
 		// table context is built, never rescanned per record.
 		let id_field = self.doc_ctx.id_field()?;
 		let id_kind = id_field.and_then(|fd| fd.field_kind.as_ref());
+		// Evaluate the `id` field's `DEFAULT` with the field's auth-level clamp
+		// applied — as the regular field pipeline does for every field — so a
+		// lower-privileged definer's DEFAULT cannot run with the caller's
+		// broader privileges.
+		let id_opt;
+		let opt = if let Some(fd) = id_field {
+			id_opt = AuthLimit::try_from(&fd.auth_limit)?.limit_opt(opt);
+			&id_opt
+		} else {
+			opt
+		};
 		// A table target (e.g. `CREATE foo`) means the id may need to be derived
 		// from the data clause, produced by the id field's `DEFAULT`, or
 		// synthesised; an explicit record-id target (e.g. `CREATE foo:bar`) is
@@ -113,7 +125,6 @@ impl Document {
 				self.id = Some(Arc::new(id));
 			}
 		}
-		//
 		Ok(())
 	}
 
