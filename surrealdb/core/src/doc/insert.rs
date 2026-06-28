@@ -111,6 +111,8 @@ impl Document {
 		self.check_table_type_insert()?;
 		// Ensure we can write to the table at all
 		self.check_permissions_quick_create(ctx, opt)?;
+		// Reject writes to read-only view tables (after the permission gate)
+		self.check_table_not_view(opt)?;
 		// Ensure any input data is computed
 		self.compute_input_data(stk, ctx, opt, stm).await?;
 		// Ensure all special fields are valid
@@ -159,6 +161,8 @@ impl Document {
 		// DUPLICATE KEY SET x = THROW ...` could exfiltrate field values
 		// field values before the permission check rejects the operation.
 		self.check_update_permissions(stk, ctx, opt, &self.current).await?;
+		// Reject writes to read-only view tables (after the permission gate)
+		self.check_table_not_view(opt)?;
 		// Ensure any input data is computed
 		self.compute_input_data(stk, ctx, opt, stm).await?;
 		// Ensure all special fields are valid

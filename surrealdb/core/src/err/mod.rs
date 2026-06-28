@@ -536,6 +536,14 @@ pub(crate) enum Error {
 		target_type: String,
 	},
 
+	/// The specified table is a view (`DEFINE TABLE ... AS SELECT`) and is read-only
+	#[error(
+		"Cannot write to the `{table}` table, as it is a view (defined with `AS SELECT`); view tables are read-only and their records are computed from the source query"
+	)]
+	TableIsView {
+		table: String,
+	},
+
 	/// The specified field did not conform to the field ASSERT clause
 	#[error(
 		"Found {value} for field `{field}`, with record `{record}`, but field must conform to: {check}",
