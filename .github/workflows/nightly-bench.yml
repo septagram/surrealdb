@@ -32,7 +32,7 @@ jobs:
     name: Nightly benchmark
     runs-on: runner-arm-bench
     if: ${{ github.repository == 'surrealdb/surrealdb-private' }} # Don't run outside the private repo
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
