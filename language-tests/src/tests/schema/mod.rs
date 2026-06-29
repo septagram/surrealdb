@@ -7,7 +7,8 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize, de};
 use surrealdb_core::dbs::NewPlannerStrategy;
 use surrealdb_core::dbs::capabilities::{
-	ExperimentalTarget, FuncTarget, MethodTarget, NetTarget, RouteTarget,
+	ArbitraryQueryTarget, EvalQueryTarget, ExperimentalTarget, FuncTarget, MethodTarget, NetTarget,
+	RouteTarget,
 };
 use surrealdb_core::syn::parser::ParserSettings;
 use surrealdb_core::syn::{self};
@@ -802,6 +803,16 @@ pub struct Capabilities {
 	#[serde(default = "bool_or_f")]
 	pub deny_experimental: BoolOr<Vec<SchemaTarget<ExperimentalTarget>>>,
 
+	#[serde(default)]
+	pub allow_arbitrary_query: BoolOr<Vec<SchemaTarget<ArbitraryQueryTarget>>>,
+	#[serde(default = "bool_or_f")]
+	pub deny_arbitrary_query: BoolOr<Vec<SchemaTarget<ArbitraryQueryTarget>>>,
+
+	#[serde(default = "bool_or_f")]
+	pub allow_eval_query: BoolOr<Vec<SchemaTarget<EvalQueryTarget>>>,
+	#[serde(default = "bool_or_f")]
+	pub deny_eval_query: BoolOr<Vec<SchemaTarget<EvalQueryTarget>>>,
+
 	#[serde(skip_serializing)]
 	#[serde(flatten)]
 	_unused_keys: BTreeMap<String, toml::Value>,
@@ -825,6 +836,10 @@ impl Default for Capabilities {
 			deny_http: BoolOr::Bool(false),
 			allow_experimental: Default::default(),
 			deny_experimental: BoolOr::Bool(false),
+			allow_arbitrary_query: BoolOr::Bool(true),
+			deny_arbitrary_query: BoolOr::Bool(false),
+			allow_eval_query: BoolOr::Bool(false),
+			deny_eval_query: BoolOr::Bool(false),
 			_unused_keys: Default::default(),
 		}
 	}

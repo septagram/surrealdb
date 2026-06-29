@@ -83,6 +83,25 @@ impl Options {
 		self
 	}
 
+	/// Resume the computation-depth count `depth` levels deeper, reducing the
+	/// remaining budget by that much (saturating at 0).
+	///
+	/// The streaming executor tracks nesting depth as a count *up* toward
+	/// `max_computation_depth`; the legacy `compute` path tracks the same limit
+	/// as the count *down* remaining budget held here in [`Self::dive`]. When the
+	/// streaming engine hands a sub-computation to the legacy path (or to
+	/// embedded scripting, which re-enters via `compute`), this carries the depth
+	/// across so one continuous count applies end-to-end. The configured maximum
+	/// is deliberately *not* altered — only the remaining budget shrinks — so the
+	/// limit a query actually hits is always `max_computation_depth`, never an
+	/// arbitrary smaller number derived from how deep the caller already was.
+	pub(crate) fn with_dive_consumed(&self, depth: u32) -> Self {
+		Self {
+			dive: self.dive.saturating_sub(depth),
+			..self.clone()
+		}
+	}
+
 	/// Specify which Namespace should be used for code which
 	/// uses this `Options`, with support for chaining.
 	pub fn with_ns(mut self, ns: Option<Arc<str>>) -> Self {

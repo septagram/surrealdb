@@ -525,6 +525,25 @@ Surrealism/WASM
   canonicalized for capability checking.
 - WASM/Surrealism capabilities must be validated before instantiation. WASI context
   configuration (especially `inherit_env`) must be reviewed for secret exposure.
+- The `eval::surql` / `eval::gql` functions (`fnc/eval.rs`) evaluate a runtime
+  query string in the caller's transaction. They must remain gated by **all** of:
+  the function-family capability (enforced by the engine before dispatch), the
+  arbitrary-query subject gate (`Capabilities::allows_query` — an `eval` call *is*
+  an arbitrary query, so it cannot bypass the front-door gate from inside a
+  `DEFINE FUNCTION` / `DEFINE API` body), and the dedicated eval subject gate
+  (`Capabilities::allows_eval_query`, `EvalQueryTarget`), which defaults to denied
+  for every subject even under `Capabilities::all()` / `--allow-all`. `eval::gql`
+  additionally inherits the `opengql` experimental gate via
+  `opengql::parse_with_capabilities`.
+- The eval subject must be derived from the *current execution* auth. This is
+  safe because `Auth::new_limited` (the auth-limiting applied to user-defined
+  function bodies) never raises the subject class — a record/guest caller is
+  returned unchanged and a system caller is only ever narrowed. A record-scoped
+  user invoking an owner-defined function that calls `eval` is therefore still
+  seen as `record` and remains denied.
+- eval must reject transaction-control and session-level top-level statements
+  (BEGIN/CANCEL/COMMIT/USE/LIVE/KILL/OPTION/SHOW/access), bound the nesting depth
+  (`MAX_EVAL_DEPTH`), and honour `PROTECTED_PARAM_NAMES` for caller bindings.
 
 ### Review Triggers
 
@@ -537,6 +556,8 @@ Flag when changes touch:
 - HTTP client pooling, DNS resolution, or redirect handling
 - New experimental features with function-level gating
 - Authority model for stored function execution
+- The `eval::*` functions, the `EvalQueryTarget` capability, or how the eval
+  subject gates derive the subject from execution auth
 - Resource limit defaults or enforcement
 
 ---

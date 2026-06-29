@@ -176,4 +176,8 @@ pub fn core_capabilities_from_test_config(cap: &TestCapabilities) -> Capabilitie
 		.without_http_routes(extract_targets(&cap.deny_http))
 		.with_experimental(extract_targets(&cap.allow_experimental))
 		.without_experimental(extract_targets(&cap.deny_experimental))
+		.with_arbitrary_query(extract_targets(&cap.allow_arbitrary_query))
+		.without_arbitrary_query(extract_targets(&cap.deny_arbitrary_query))
+		.with_eval_query(extract_targets(&cap.allow_eval_query))
+		.without_eval_query(extract_targets(&cap.deny_eval_query))
 }

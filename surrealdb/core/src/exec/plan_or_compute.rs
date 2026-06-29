@@ -86,12 +86,26 @@ pub(crate) async fn legacy_compute(
 ///
 /// This is the simple variant used when no context mutation is needed
 /// (e.g. evaluating a FOR range, an IF condition, or an IF/ELSE branch body).
-pub(crate) async fn evaluate_expr(
+/// Plan and evaluate an expression, falling back to legacy compute if the
+/// planner returns `PlannerUnsupported` or `PlannerUnimplemented`, seeding the
+/// planner's expression-nesting depth (see
+/// [`crate::exec::planner::Planner::with_depth`]).
+///
+/// `depth` is 0 for an ordinary top-level evaluation. It is non-zero when
+/// re-planning a nested query at runtime — chiefly `eval::*` re-planning its
+/// query string, and the deferred control-flow operators (IfElse/Foreach/
+/// Sequence) re-planning their bodies — where passing the depth recorded on the
+/// triggering node continues the count toward `max_computation_depth` instead of
+/// resetting it. That is what bounds nested-`eval`/UDF recursion the same way the
+/// legacy `compute` path bounds it via `Options::dive`; the legacy fallback below
+/// mirrors it by handing the remaining budget (`max - depth`) to `compute`.
+pub(crate) async fn evaluate_expr_at_depth(
 	expr: &Expr,
 	ctx: &ExecutionContext,
+	depth: u32,
 ) -> crate::expr::FlowResult<Value> {
 	let auth = ctx.options().map(|o| Arc::clone(&o.auth));
-	match try_plan_expr!(expr, ctx.ctx(), ctx.txn(), auth) {
+	match try_plan_expr!(expr, ctx.ctx(), ctx.txn(), auth, depth) {
 		Ok(plan) => {
 			let stream = plan.execute(ctx)?;
 			collect_single_value(stream).await
@@ -108,7 +122,10 @@ pub(crate) async fn evaluate_expr(
 			}
 			let (opt, frozen) =
 				get_legacy_context(ctx).context("Legacy compute fallback context unavailable")?;
-			legacy_compute(expr, &frozen, opt, None).await
+			// Continue the depth count into the legacy path: a DML/DDL body reached
+			// via `eval` keeps counting from `depth` rather than a fresh budget.
+			let opt = opt.with_dive_consumed(depth);
+			legacy_compute(expr, &frozen, &opt, None).await
 		}
 		Err(e) => Err(ControlFlow::Err(e.into())),
 	}
@@ -125,11 +142,12 @@ pub(crate) async fn evaluate_body_expr(
 	ctx: &mut ExecutionContext,
 	param_name: &str,
 	param_value: &Value,
+	depth: u32,
 ) -> crate::expr::FlowResult<Value> {
 	let frozen_ctx = Arc::clone(ctx.ctx());
 	let auth = ctx.options().map(|o| Arc::clone(&o.auth));
 
-	match try_plan_expr!(expr, &frozen_ctx, ctx.txn(), auth) {
+	match try_plan_expr!(expr, &frozen_ctx, ctx.txn(), auth, depth) {
 		Ok(plan) => {
 			if plan.mutates_context() {
 				*ctx = plan.output_context(ctx).await.map_err(|e| ControlFlow::Err(e.into()))?;
@@ -151,6 +169,8 @@ pub(crate) async fn evaluate_body_expr(
 			}
 			let (opt, frozen) = get_legacy_context_with_param(ctx, param_name, param_value)
 				.context("Legacy compute fallback context unavailable")?;
+			// Continue the depth count into the legacy path from `depth`.
+			let opt = &opt.with_dive_consumed(depth);
 
 			if let Expr::Let(set_stmt) = expr {
 				if set_stmt.is_protected_set() {

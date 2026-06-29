@@ -51,7 +51,7 @@ use crate::ctx::{CancelHandle, Context};
 #[cfg(feature = "jwks")]
 use crate::dbs::capabilities::NetTarget;
 use crate::dbs::capabilities::{
-	ArbitraryQueryTarget, ExperimentalTarget, MethodTarget, RouteTarget,
+	ArbitraryQueryTarget, EvalQueryTarget, ExperimentalTarget, MethodTarget, RouteTarget,
 };
 use crate::dbs::node::{Node, Timestamp};
 use crate::dbs::{
@@ -1152,6 +1152,11 @@ impl Datastore {
 	/// Is the user allowed to query?
 	pub fn allows_query_by_subject(&self, subject: impl Into<ArbitraryQueryTarget>) -> bool {
 		self.capabilities.allows_query(&subject.into())
+	}
+
+	/// Is the user allowed to invoke the `eval::*` functions?
+	pub fn allows_eval_query_by_subject(&self, subject: impl Into<EvalQueryTarget>) -> bool {
+		self.capabilities.allows_eval_query(&subject.into())
 	}
 
 	/// Does the datastore allow connections to a network target?

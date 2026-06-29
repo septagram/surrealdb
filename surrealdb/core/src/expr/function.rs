@@ -68,7 +68,9 @@ impl Function {
 			| Self::Silo {
 				..
 			} => false,
-			Self::Normal(f) => f != "api::invoke",
+			// `eval::*` can evaluate arbitrary nested queries (including writes),
+			// so they must open a write transaction like `api::invoke`.
+			Self::Normal(f) => f != "api::invoke" && f != "eval::surql" && f != "eval::gql",
 			Self::Model(_) => true,
 		}
 	}

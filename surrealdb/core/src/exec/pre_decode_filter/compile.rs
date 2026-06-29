@@ -1585,6 +1585,7 @@ mod tests {
 			name: "array::len".into(),
 			arguments: vec![tags_idiom],
 			func_required_context: ContextLevel::Root,
+			plan_depth: 0,
 		}) as Arc<dyn crate::exec::PhysicalExpr>;
 		let p = Arc::new(BinaryOp {
 			left: array_len,
@@ -1756,6 +1757,7 @@ mod tests {
 			name: "array::len".into(),
 			arguments: vec![tags_idiom],
 			func_required_context: ContextLevel::Root,
+			plan_depth: 0,
 		}) as Arc<dyn crate::exec::PhysicalExpr>;
 		// Literal on the left, function on the right → reversed compile.
 		let p = Arc::new(BinaryOp {
