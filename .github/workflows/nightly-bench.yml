@@ -10,6 +10,8 @@ on:
   #    - synchronize
   #    - reopened
 
+  workflow_dispatch:
+
   schedule:
     - cron: "0 0 * * *" # Run every night at 12 a clock
 
