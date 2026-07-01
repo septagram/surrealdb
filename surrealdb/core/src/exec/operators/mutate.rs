@@ -256,7 +256,7 @@ impl ExecOperator for DeleteBinding {
 fn legacy_handles(ctx: &ExecutionContext) -> FlowResult<(Options, FrozenContext)> {
 	let (opt, frozen) =
 		get_legacy_context(ctx).map_err(|e| ControlFlow::Err(anyhow::anyhow!(e)))?;
-	Ok((opt.clone(), frozen))
+	Ok((opt, frozen))
 }
 
 /// Recover the record id of the node/edge bound at `name` via the shared
