@@ -162,6 +162,15 @@ impl DefineFieldStatement {
 		// Allowed to run?
 		ctx.is_allowed(opt, Action::Edit, ResourceKind::Field, Base::Db)?;
 
+		// A PERMISSIONS clause must not perform writes (GHSA-66r2-5gwj-gxm2).
+		if self.permissions.has_direct_write() {
+			return Err(Error::PermissionClauseNotReadonly {
+				kind: "field",
+				name: definition.name.to_sql(),
+			}
+			.into());
+		}
+
 		// Validate any GRAPHQL_ALIAS at definition time so typos surface here
 		// rather than silently falling back at schema-generation time.
 		super::validate_graphql_alias(&self.graphql_alias, "field")?;

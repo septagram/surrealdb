@@ -32,25 +32,44 @@ use crate::val::Value;
 /// parameters, transactions, capabilities, and all legacy context fields.
 pub(crate) fn get_legacy_context(
 	exec_ctx: &ExecutionContext,
-) -> Result<(&crate::dbs::Options, FrozenContext), Error> {
+) -> Result<(crate::dbs::Options, FrozenContext), Error> {
 	let options = exec_ctx
 		.options()
 		.ok_or_else(|| Error::Thrown("Options not available for legacy compute fallback".into()))?;
+	let options = legacy_fallback_options(exec_ctx, options);
 	Ok((options, Arc::clone(exec_ctx.ctx())))
+}
+
+/// Derive the `Options` to use for a legacy compute fallback.
+///
+/// When the streaming context is evaluating a `PERMISSIONS` predicate
+/// (signalled by `skip_fetch_perms`), the fallback must block write side
+/// effects so a predicate cannot mutate data through the legacy compute path
+/// (GHSA-66r2-5gwj-gxm2).
+fn legacy_fallback_options(
+	exec_ctx: &ExecutionContext,
+	options: &crate::dbs::Options,
+) -> crate::dbs::Options {
+	if exec_ctx.root().skip_fetch_perms {
+		options.new_for_permission_predicate()
+	} else {
+		options.clone()
+	}
 }
 
 /// Extract the `Options` and `FrozenContext` for legacy fallback, adding a loop
 /// variable to the context.
 ///
 /// Used by the `ForeachPlan` operator to inject the current iteration value.
-pub(crate) fn get_legacy_context_with_param<'a>(
-	exec_ctx: &'a ExecutionContext,
+pub(crate) fn get_legacy_context_with_param(
+	exec_ctx: &ExecutionContext,
 	param_name: &str,
 	param_value: &Value,
-) -> Result<(&'a crate::dbs::Options, FrozenContext), Error> {
+) -> Result<(crate::dbs::Options, FrozenContext), Error> {
 	let options = exec_ctx
 		.options()
 		.ok_or_else(|| Error::Thrown("Options not available for legacy compute fallback".into()))?;
+	let options = legacy_fallback_options(exec_ctx, options);
 
 	let mut ctx = crate::ctx::Context::new_child(exec_ctx.ctx());
 	ctx.add_value(param_name.to_string(), std::sync::Arc::new(param_value.clone()));
@@ -170,7 +189,7 @@ pub(crate) async fn evaluate_body_expr(
 			let (opt, frozen) = get_legacy_context_with_param(ctx, param_name, param_value)
 				.context("Legacy compute fallback context unavailable")?;
 			// Continue the depth count into the legacy path from `depth`.
-			let opt = &opt.with_dive_consumed(depth);
+			let opt = opt.with_dive_consumed(depth);
 
 			if let Expr::Let(set_stmt) = expr {
 				if set_stmt.is_protected_set() {
@@ -180,7 +199,7 @@ pub(crate) async fn evaluate_body_expr(
 					.into());
 				}
 
-				let value = legacy_compute(&set_stmt.what, &frozen, opt, None).await?;
+				let value = legacy_compute(&set_stmt.what, &frozen, &opt, None).await?;
 
 				let value = if let Some(kind) = &set_stmt.kind {
 					value.coerce_to_kind(kind).map_err(|e| Error::SetCoerce {
@@ -194,7 +213,7 @@ pub(crate) async fn evaluate_body_expr(
 				*ctx = ctx.with_param(set_stmt.name.clone(), value);
 				Ok(Value::None)
 			} else {
-				legacy_compute(expr, &frozen, opt, None).await
+				legacy_compute(expr, &frozen, &opt, None).await
 			}
 		}
 		Err(e) => Err(ControlFlow::Err(e.into())),

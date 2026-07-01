@@ -457,8 +457,8 @@ impl Document {
 			Permission::None => Err(IgnoreError::Ignore),
 			Permission::Full => Ok(()),
 			Permission::Specific(e) => {
-				// Disable permissions
-				let opt = &opt.new_with_perms(false);
+				// Disable permission recursion and block side effects
+				let opt = &opt.new_for_permission_predicate();
 				// Process the PERMISSION clause
 				if !stk
 					.run(|stk| e.compute(stk, ctx, opt, Some(doc)))

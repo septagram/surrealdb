@@ -135,8 +135,8 @@ pub async fn process_api_request_with_stack(
 				}
 				Permission::Full => (),
 				Permission::Specific(e) => {
-					// Disable permissions
-					let opt = &opt.new_with_perms(false);
+					// Disable permission recursion and block side effects
+					let opt = &opt.new_for_permission_predicate();
 					// Process the PERMISSION clause
 					if !stk
 						.run(|stk| e.compute(stk, ctx, opt, None))

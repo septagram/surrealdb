@@ -154,7 +154,15 @@ Flag for detailed review when changes touch:
 - Reference cascade operations (ON DELETE CASCADE, UNSET, CUSTOM) must only modify
   records reachable through explicitly defined REFERENCE relationships.
 - Permission expressions (WHERE clause in PERMISSIONS) must not produce observable
-  side effects (writes, deletes, event triggers).
+  side effects (writes, deletes, event triggers). This is enforced in two layers
+  (GHSA-66r2-5gwj-gxm2): definition-time rejection of clauses that directly contain
+  a data-modifying statement (`Permissions::has_direct_write`, checked in every
+  `DEFINE` that stores permissions), and a runtime guard that rejects any mutating
+  statement reached while a predicate is evaluated. Predicate evaluation always
+  uses `Options::new_for_permission_predicate` (legacy path) or carries
+  `skip_fetch_perms` (streaming path), both of which set `Options::permission_predicate`
+  so `Expr::compute` blocks CREATE/UPDATE/DELETE/RELATE/INSERT/UPSERT and DDL —
+  including writes reached through custom-function bodies.
 - The Auth context within Options must not be mutated by user-controlled operations.
   Only system-internal mechanisms (AuthLimit) may produce derived Options with
   modified auth, and these must never broaden permissions.

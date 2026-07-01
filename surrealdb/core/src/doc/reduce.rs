@@ -185,8 +185,8 @@ impl Document {
 				}
 				Permission::Specific(e) => {
 					for k in original.doc.as_ref().each(&fd.name).iter().rev() {
-						// Disable permissions
-						let opt = &opt.new_with_perms(false);
+						// Disable permission recursion and block side effects
+						let opt = &opt.new_for_permission_predicate();
 						// Get the computed value
 						let val = Arc::new(original.doc.as_ref().pick(k));
 						// Configure the context
@@ -243,8 +243,8 @@ impl Document {
 					Permission::Full => (),
 					Permission::None => reduced.to_mut().cut(k),
 					Permission::Specific(e) => {
-						// Disable permissions
-						let opt = &opt.new_with_perms(false);
+						// Disable permission recursion and block side effects
+						let opt = &opt.new_for_permission_predicate();
 						// Get the initial value
 						let val = Arc::new(full.doc.as_ref().pick(k));
 						// Configure the context

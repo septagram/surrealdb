@@ -354,8 +354,8 @@ impl Document {
 					let original = snapshot.get_or_insert_with(|| out.clone());
 					// SECURITY: iterate in reverse (see the None arm above, #7356).
 					for k in original.each(&fd.name).iter().rev() {
-						// Disable permissions
-						let opt = &opt.new_with_perms(false);
+						// Disable permission recursion and block side effects
+						let opt = &opt.new_for_permission_predicate();
 						// Get the projected value from the snapshot
 						let val = Arc::new(original.pick(k));
 						// Configure the context

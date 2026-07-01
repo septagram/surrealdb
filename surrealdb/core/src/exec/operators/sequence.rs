@@ -197,16 +197,16 @@ async fn execute_block_with_context(
 				// `depth` rather than handing it a fresh budget.
 				let (opt, frozen) = legacy_context_for_fallback(&current_ctx)
 					.context("Legacy compute fallback context unavailable")?;
-				let opt = &opt.with_dive_consumed(depth);
+				let opt = opt.with_dive_consumed(depth);
 
 				if let Expr::Let(set_stmt) = expr {
-					let value = legacy_compute(&set_stmt.what, &frozen, opt, None).await?;
+					let value = legacy_compute(&set_stmt.what, &frozen, &opt, None).await?;
 
 					// Update context with the new variable
 					current_ctx = current_ctx.with_param(set_stmt.name.clone(), value.clone());
 					result = Value::None;
 				} else {
-					result = legacy_compute(expr, &frozen, opt, None).await?;
+					result = legacy_compute(expr, &frozen, &opt, None).await?;
 				}
 			}
 			Err(e) => return Err(ControlFlow::Err(e.into())),
@@ -223,10 +223,18 @@ async fn execute_block_with_context(
 /// (issue #7131).
 fn legacy_context_for_fallback(
 	exec_ctx: &ExecutionContext,
-) -> Result<(&crate::dbs::Options, FrozenContext), Error> {
+) -> Result<(crate::dbs::Options, FrozenContext), Error> {
 	let options = exec_ctx.options().ok_or_else(|| {
 		Error::Internal("Options not available for legacy compute fallback".into())
 	})?;
+	// Block write side effects when this sequence is evaluated inside a
+	// PERMISSIONS predicate (signalled by `skip_fetch_perms`), so a predicate
+	// cannot mutate data via the legacy compute fallback (GHSA-66r2-5gwj-gxm2).
+	let options = if exec_ctx.root().skip_fetch_perms {
+		options.new_for_permission_predicate()
+	} else {
+		options.clone()
+	};
 	Ok((options, Arc::clone(exec_ctx.ctx())))
 }
 

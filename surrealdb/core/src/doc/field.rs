@@ -706,8 +706,8 @@ impl FieldEditContext<'_> {
 					let now = Arc::new(val.clone());
 					// Get the current document
 					let doc = Some(&self.doc.current);
-					// Disable permissions
-					let opt = &self.opt.new_with_perms(false);
+					// Disable permission recursion and block side effects
+					let opt = &self.opt.new_for_permission_predicate();
 					// Configure the context
 					// Configure the context
 					let ctx = match self.context.take() {

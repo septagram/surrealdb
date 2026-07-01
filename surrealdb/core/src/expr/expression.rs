@@ -156,6 +156,64 @@ impl Expr {
 		}
 	}
 
+	/// Check whether this expression's own tree *directly* contains a
+	/// data-modifying statement (CREATE/UPDATE/DELETE/RELATE/INSERT/UPSERT or
+	/// DDL).
+	///
+	/// Used to reject side-effecting `PERMISSIONS` clauses at definition time
+	/// (GHSA-66r2-5gwj-gxm2). Unlike [`Expr::read_only`], a function or closure
+	/// *call* is treated as opaque — a custom function may itself write, but
+	/// that is enforced at runtime via [`crate::dbs::Options::new_for_permission_predicate`]
+	/// — so common read-only helper predicates such as
+	/// `PERMISSIONS WHERE fn::is_owner()` remain valid. Writes buried inside a
+	/// subquery or idiom are likewise left to the runtime guard.
+	pub(crate) fn has_direct_write(&self) -> bool {
+		match self {
+			// Data-modifying statements: a direct write.
+			Expr::Create(_)
+			| Expr::Update(_)
+			| Expr::Delete(_)
+			| Expr::Relate(_)
+			| Expr::Insert(_)
+			| Expr::Define(_)
+			| Expr::Remove(_)
+			| Expr::Rebuild(_)
+			| Expr::Upsert(_)
+			| Expr::Alter(_) => true,
+
+			// Combinators: recurse into nested expressions.
+			Expr::Prefix {
+				expr,
+				..
+			}
+			| Expr::Postfix {
+				expr,
+				..
+			}
+			| Expr::Throw(expr) => expr.has_direct_write(),
+			Expr::Binary {
+				left,
+				right,
+				..
+			} => left.has_direct_write() || right.has_direct_write(),
+			Expr::Return(s) => s.what.has_direct_write(),
+			Expr::Let(s) => s.what.has_direct_write(),
+			Expr::Block(block) => block.has_direct_write(),
+			Expr::IfElse(s) => s.has_direct_write(),
+			Expr::Foreach(s) => s.has_direct_write(),
+			Expr::Explain {
+				statement,
+				..
+			} => statement.has_direct_write(),
+			// Call arguments are evaluated in place, so inspect them; the callee
+			// body is opaque and handled by the runtime guard.
+			Expr::FunctionCall(function) => function.arguments.iter().any(|x| x.has_direct_write()),
+
+			// Leaves, closures, subqueries and idioms contain no *direct* write.
+			_ => false,
+		}
+	}
+
 	pub fn from_public_value(value: PublicValue) -> Self {
 		match value {
 			surrealdb_types::Value::None => Expr::Literal(Literal::None),
@@ -364,6 +422,29 @@ impl Expr {
 		doc: Option<&CursorDoc>,
 	) -> FlowResult<Value> {
 		let opt = opt.dive(1).map_err(anyhow::Error::new)?;
+
+		// While evaluating a PERMISSIONS predicate (which runs with permission
+		// enforcement disabled) no statement may modify data — otherwise a
+		// stored permission expression could perform unauthorized writes during
+		// a permission check (GHSA-66r2-5gwj-gxm2). This catches writes reached
+		// directly, through nested subqueries, or through function/closure
+		// bodies, on both the legacy and streaming execution paths.
+		if opt.permission_predicate
+			&& matches!(
+				self,
+				Expr::Create(_)
+					| Expr::Update(_)
+					| Expr::Upsert(_)
+					| Expr::Delete(_)
+					| Expr::Relate(_)
+					| Expr::Insert(_)
+					| Expr::Define(_)
+					| Expr::Remove(_)
+					| Expr::Rebuild(_)
+					| Expr::Alter(_)
+			) {
+			return Err(ControlFlow::Err(anyhow::Error::new(Error::PermissionPredicateSideEffect)));
+		}
 
 		match self {
 			Expr::Literal(literal) => literal.compute(stk, ctx, &opt, doc).await,

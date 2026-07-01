@@ -514,6 +514,23 @@ pub(crate) enum Error {
 		op: BucketOperation,
 	},
 
+	/// A permission predicate attempted to perform a write or other side effect
+	/// while being evaluated (GHSA-66r2-5gwj-gxm2). Permission expressions are
+	/// evaluated with permission enforcement disabled, so they must be free of
+	/// observable side effects.
+	#[error("A PERMISSIONS clause cannot contain a statement that modifies data")]
+	PermissionPredicateSideEffect,
+
+	/// A DEFINE/ALTER (or import) supplied a permission clause that directly
+	/// contains a data-modifying statement, which is not allowed.
+	#[error(
+		"Found a non-read-only expression in the PERMISSIONS clause for {kind} `{name}`, but a PERMISSIONS clause must not modify data"
+	)]
+	PermissionClauseNotReadonly {
+		kind: &'static str,
+		name: String,
+	},
+
 	/// A database entry for the specified record already exists
 	#[error("Database record `{record}` already exists", record = record.to_sql())]
 	RecordExists {

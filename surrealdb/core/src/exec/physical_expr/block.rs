@@ -70,13 +70,24 @@ fn create_planning_context(
 ///
 /// Since the ExecutionContext's FrozenContext is the single source of truth
 /// for parameters, we can use it directly without reconstruction.
-fn get_legacy_context<'a>(
-	exec_ctx: &'a crate::exec::ExecutionContext,
+fn get_legacy_context(
+	exec_ctx: &crate::exec::ExecutionContext,
 	cached_ctx: &mut Option<FrozenContext>,
-) -> anyhow::Result<(&'a crate::dbs::Options, FrozenContext)> {
+	permission_predicate: bool,
+) -> anyhow::Result<(crate::dbs::Options, FrozenContext)> {
 	let options = exec_ctx
 		.options()
 		.ok_or_else(|| anyhow::anyhow!("Options not available for legacy compute fallback"))?;
+
+	// When this block is evaluated inside a PERMISSIONS predicate (signalled by
+	// `skip_fetch_perms`), block write side effects on the legacy compute
+	// fallback so a predicate cannot mutate data via a custom function body or
+	// nested statement (GHSA-66r2-5gwj-gxm2).
+	let options = if permission_predicate {
+		options.new_for_permission_predicate()
+	} else {
+		options.clone()
+	};
 
 	// Use or create a cached context for legacy compute
 	let frozen = if let Some(ctx) = cached_ctx.take() {
@@ -232,7 +243,11 @@ impl BlockPhysicalExpr {
 								}
 								_ => {}
 							}
-							let (opt, frozen) = get_legacy_context(current_exec_ctx, legacy_ctx)?;
+							let (opt, frozen) = get_legacy_context(
+								current_exec_ctx,
+								legacy_ctx,
+								ctx.skip_fetch_perms,
+							)?;
 							let opt = &opt.with_dive_consumed(depth);
 							let doc = current_value_for_legacy
 								.map(|v| CursorDoc::new(None, None, v.clone()));
@@ -314,7 +329,8 @@ impl BlockPhysicalExpr {
 							}
 							_ => {}
 						}
-						let (opt, frozen) = get_legacy_context(current_exec_ctx, legacy_ctx)?;
+						let (opt, frozen) =
+							get_legacy_context(current_exec_ctx, legacy_ctx, ctx.skip_fetch_perms)?;
 						let opt = &opt.with_dive_consumed(depth);
 						let doc =
 							current_value_for_legacy.map(|v| CursorDoc::new(None, None, v.clone()));
