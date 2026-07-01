@@ -680,10 +680,12 @@ the binding-table operators — `exec/operators/graph/` (`expand.rs`, `endpoint.
 `ntw/opengql.rs` (`/gql` route)
 
 OpenGQL is a second query language lowered to a `MatchPlan` IR and executed by
-the streaming engine. It is **read-only**: the lowering constructs only a single
-top-level `Expr::Match`, and no GQL surface can express a mutation (CREATE,
-RELATE, UPDATE, DELETE, DEFINE, REMOVE all parse-then-reject or have no grammar).
-Its security posture rests on four invariants.
+the streaming engine. The lowering constructs only a single top-level
+`Expr::Match` (never any other `Expr`, and never a `sql::Ast`). It supports reads
+(`MATCH … RETURN`) and the four ISO data-modifying statements (`INSERT`, `SET`,
+`REMOVE`, `DELETE`), which the `MatchPlan` carries as trailing mutation stages
+executed through the native document pipeline. Its security posture rests on five
+invariants.
 
 ### Invariants
 
@@ -729,13 +731,48 @@ Its security posture rests on four invariants.
   poll `ctx.cancellation()` in its hot loops (the streaming buffer/monitor
   wrappers inject none) or a long-running MATCH ignores client disconnect / query
   timeout — a DoS. Dropping a poll is a regression.
-- **Read-only execution.** The `MatchPlan` must run only under the streaming
-  engine; its compute-only arm is a hard error (`Expr::Match` `compute()` returns
+- **Streaming-only execution & no serialization.** The `MatchPlan` must run only under the
+  streaming engine; its compute-only arm is a hard error (`Expr::Match` `compute()` returns
   *"GQL MATCH requires the streaming execution engine; it cannot run under the
   compute-only planner strategy"*). `Expr::Match` must never enter a `sql::Ast`,
   the catalog, or `Revisioned` serialization — the `From<expr::Expr> for sql::Expr`
   conversion logs, `debug_assert!`s, and emits a placeholder rather than
-  round-tripping it.
+  round-tripping it. A mutation-bearing plan reports `read_only() == false`
+  (`MatchPlan::has_mutations`), so the executor opens a write transaction.
+- **Mutation safety.** GQL mutations must execute through the native document pipeline via
+  `exec/plan_or_compute::legacy_compute` — a synthetic core `Create`/`Update`/`Delete`/`Relate`
+  statement per resolved record id — never by writing the KV store directly, so record/field
+  permissions, field validation, events, indexes, references, and live-query notifications all
+  apply exactly as for a native mutation. The mutation operators (`exec/operators/mutate.rs`)
+  must stay pipeline breakers: they fully drain their input before any write (avoiding the
+  Halloween problem of a still-open scan re-observing a freshly written row), then apply per
+  row in textual order (row-scoped, last-write-wins on a fan-out). A `RETURN` after a mutation
+  must re-bind only the permission-filtered
+  post-mutation image (the value the native mutation returns), never raw fields the caller
+  cannot read. `NODETACH DELETE` (the ISO default) must probe for connected edges and error if
+  any exist (native `DELETE` always cascades = `DETACH`); that integrity probe (`has_connected_edges`)
+  must **peek the record's graph-key range directly off the transaction** — the same
+  permission-independent check the native cascade uses (`doc::purge::purge_edges`), NOT a
+  SELECT/idiom read — so it reflects the record's actual adjacency, not the caller's SELECT
+  visibility. Otherwise a record-scoped user who cannot see the incident edges would slip past the
+  guard and trigger a silent cascade. Per-property `SET a.p` and the `SET a = {…}` surface both
+  reject the reserved keys (`id`, edge `in`/`out`), since the native write path silently re-stamps
+  them. Label mutations are rejected (one table per record).
+- **Read-after-write ordering.** A `MATCH`/`OPTIONAL` clause that follows a mutation must observe
+  that mutation's writes (read-your-writes within the one transaction), and must never race them.
+  The streaming engine's read-only buffering (`buffer.rs` `spawn_buffered`) opens scan cursors
+  *eagerly* at stream-construction time for pipeline parallelism; that eager read is buried
+  throughout a subtree (every read-only operator buffers its child), so it cannot be defeated by
+  buffering choices at the join level alone. `HashJoin` (the operator that joins a read clause onto
+  the accumulated bindings) handles this by ensuring **the writing side drains before the reading
+  side is constructed**, and which side mutates depends on the fold: `fold_mandatory` puts the
+  mutating accumulator on the **build** side (then DEFER the probe's construction until the build
+  drains), while `fold_optional`'s left-join puts it on the **probe** side (then PRE-DRAIN the probe
+  — a pipeline breaker, so draining executes its writes — before constructing the build, and replay
+  the buffered probe rows). Both directions are load-bearing: reverting either to eager construction
+  silently reintroduces stale reads (a `MATCH`/`OPTIONAL` after `SET`/`DELETE`/`INSERT` seeing
+  pre-write data). Pure-read joins keep eager construction on both sides (one shared snapshot;
+  overlap is safe and faster).
 
 ### Review Triggers
 
@@ -755,8 +792,21 @@ Flag when changes touch:
   correlated OPTIONAL-block predicate into it — a correlated predicate that
   becomes a post-join `Filter` instead silently turns an OPTIONAL into an inner
   join (drops rows that must be null-filled)
-- The lowering's read-only surface (any path that would let GQL construct an
-  `Expr` other than a top-level `Expr::Match`, or express a mutation)
+- `HashJoin::execute`'s build-vs-probe construction order — both the deferred-probe
+  branch (build mutates ⇒ construct the probe only after the build drains) and the
+  pre-drain branch (probe mutates ⇒ drain the probe, executing its writes, before
+  constructing the build) are load-bearing for read-after-write correctness in
+  interleaved `MATCH … SET/DELETE/INSERT … MATCH/OPTIONAL …` programs (see Mutation
+  safety, above); `fold_mandatory` vs `fold_optional` decide which side mutates
+- The lowering's surface (any path that would let GQL construct an `Expr` other
+  than a top-level `Expr::Match`)
+- The mutation pipeline: `exec/operators/mutate.rs` (a write that bypasses
+  `legacy_compute`, a dropped pipeline-breaker drain, a re-bound RETURN image that
+  is not permission-filtered, or a `NODETACH` path that skips the edge probe),
+  `opengql/lower/mutation.rs` (a dropped rejection — label mutation, group/path or
+  unbound target, reserved `id`/`in`/`out` keys), and `Expr::Match` `read_only()`
+  in `expr/expression.rs` (a mutation plan that reports read-only would run in a
+  read transaction)
 - The `Expr::Match` compute-arm error or the `sql::Expr` conversion guard
 
 ---

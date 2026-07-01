@@ -11,8 +11,9 @@
 use reblessive::Stk;
 
 use crate::opengql::ast::{
-	GqlExpr, GqlGroupItem, GqlLiteral, GqlStatement, MatchClause, MatchItem, MatchQuery,
-	OptionalBlock, OrderItem, ReturnClause, ReturnItem, ReturnItems, SetQuantifier,
+	DetachMode, GqlExpr, GqlGroupItem, GqlLiteral, GqlStep, LinearQuery, MatchClause, MatchItem,
+	MutationStatement, OptionalBlock, OrderItem, ReturnClause, ReturnItem, ReturnItems,
+	SetQuantifier,
 };
 use crate::opengql::parser::mac::{enter_object_recursion, expected, unexpected};
 use crate::opengql::parser::{ParseResult, Parser};
@@ -20,66 +21,105 @@ use crate::opengql::token::{NumberKind, Span, TokenKind, t};
 use crate::syn::error::bail;
 
 impl Parser<'_> {
-	/// Parse a top level statement: zero or more `MATCH` items (plain or
-	/// `OPTIONAL`) followed by a `RETURN` clause.
-	pub(super) async fn parse_statement(&mut self, stk: &mut Stk) -> ParseResult<GqlStatement> {
-		let mut items = Vec::new();
+	/// Parse a top level linear query: a sequence of `MATCH`/`OPTIONAL` reads and
+	/// `INSERT`/`SET`/`REMOVE`/`DELETE` mutations — in any textual order — and an
+	/// optional trailing `RETURN` clause.
+	pub(super) async fn parse_statement(&mut self, stk: &mut Stk) -> ParseResult<LinearQuery> {
+		let start = self.peek().span;
+
+		// Steps in textual order: reads and mutations may interleave freely.
+		let mut steps = Vec::new();
 		loop {
 			let token = self.peek();
 			match token.kind {
 				t!("MATCH") => {
 					self.pop_peek();
 					let clause = self.parse_match_clause(stk, token.span).await?;
-					items.push(MatchItem::Match(clause));
+					steps.push(GqlStep::Read(MatchItem::Match(clause)));
 				}
 				t!("OPTIONAL") => {
 					self.pop_peek();
 					let block = stk.run(|stk| self.parse_optional_operand(stk, token.span)).await?;
-					items.push(MatchItem::Optional(block));
+					steps.push(GqlStep::Read(MatchItem::Optional(block)));
 				}
-				t!("RETURN") => break,
-				t!("FINISH") => {
-					bail!(
-						"FINISH statements are not supported yet",
-						@token.span => "queries must end with a RETURN clause"
-					);
+				t!("INSERT") => {
+					self.pop_peek();
+					let stmt = self.parse_insert_statement(stk, token.span).await?;
+					steps.push(GqlStep::Mutate(MutationStatement::Insert(stmt)));
 				}
-				t!("LET") | t!("FOR") | t!("FILTER") | t!("USE") | t!("SELECT") | t!("CALL") => {
-					bail!(
-						"`{}` statements are not supported yet",
-						token.kind,
-						@token.span
-					);
+				t!("SET") => {
+					self.pop_peek();
+					let stmt = self.parse_set_statement(stk, token.span).await?;
+					steps.push(GqlStep::Mutate(MutationStatement::Set(stmt)));
 				}
-				t!("ORDER") | t!("OFFSET") | t!("SKIP") | t!("LIMIT") => {
-					bail!(
-						"Standalone `{}` statements between MATCH clauses are not supported yet",
-						token.kind,
-						@token.span => "ORDER BY, OFFSET/SKIP and LIMIT may only follow the RETURN clause"
-					);
+				t!("REMOVE") => {
+					self.pop_peek();
+					let stmt = self.parse_remove_statement(token.span)?;
+					steps.push(GqlStep::Mutate(MutationStatement::Remove(stmt)));
 				}
-				t!("INSERT")
-				| t!("CREATE")
-				| t!("SET")
-				| t!("REMOVE")
-				| t!("DELETE")
-				| t!("DETACH")
-				| t!("NODETACH")
-				| t!("DROP") => {
-					bail!(
-						"GQL write statements are not supported in this version (read-only)",
-						@token.span
-					);
+				t!("DELETE") => {
+					self.pop_peek();
+					let stmt =
+						self.parse_delete_statement(stk, DetachMode::NoDetach, token.span).await?;
+					steps.push(GqlStep::Mutate(MutationStatement::Delete(stmt)));
 				}
-				_ => unexpected!(self, token, "a MATCH or RETURN statement"),
+				t!("DETACH") | t!("NODETACH") => {
+					let detach = if matches!(token.kind, t!("DETACH")) {
+						DetachMode::Detach
+					} else {
+						DetachMode::NoDetach
+					};
+					self.pop_peek();
+					expected!(self, t!("DELETE"));
+					let stmt = self.parse_delete_statement(stk, detach, token.span).await?;
+					steps.push(GqlStep::Mutate(MutationStatement::Delete(stmt)));
+				}
+				_ => break,
 			}
 		}
-		let ret = self.parse_return_clause(stk).await?;
+
+		// --- Optional trailing RETURN, or a precise rejection. ---
+		let token = self.peek();
+		let ret = match token.kind {
+			t!("RETURN") => Some(self.parse_return_clause(stk).await?),
+			_ if token.is_eof() => None,
+			t!("FINISH") => {
+				bail!(
+					"FINISH statements are not supported yet",
+					@token.span => "queries must end with a RETURN clause"
+				);
+			}
+			t!("LET") | t!("FOR") | t!("FILTER") | t!("USE") | t!("SELECT") | t!("CALL") => {
+				bail!(
+					"`{}` statements are not supported yet",
+					token.kind,
+					@token.span
+				);
+			}
+			t!("ORDER") | t!("OFFSET") | t!("SKIP") | t!("LIMIT") => {
+				bail!(
+					"Standalone `{}` statements are not supported yet",
+					token.kind,
+					@token.span => "ORDER BY, OFFSET/SKIP and LIMIT may only follow the RETURN clause"
+				);
+			}
+			t!("CREATE") | t!("DROP") => {
+				bail!(
+					"`{}` statements are not supported yet",
+					token.kind,
+					@token.span
+				);
+			}
+			_ => {
+				unexpected!(self, token, "a MATCH, INSERT, SET, REMOVE, DELETE or RETURN statement")
+			}
+		};
 		self.check_trailing_clauses()?;
-		Ok(GqlStatement::Match(MatchQuery {
-			items,
+		Ok(LinearQuery {
+			steps,
 			ret,
-		}))
+			span: start.covers(self.last_span()),
+		})
 	}
 
 	/// Parse an `OPTIONAL` operand (`optionalOperand`, GQL.g4:591), all three

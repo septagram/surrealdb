@@ -433,9 +433,14 @@ fn path_pattern_prefix_parse_errors(#[case] source: &str, #[case] needle: &str) 
 #[test]
 fn double_minus_is_a_comment() {
 	// openCypher trap (deviation (f)1): `--` introduces a line comment, so
-	// `(a)--(b)` comments out the rest of the line.
-	let error = parse_err("MATCH (a)--(b) RETURN 1");
-	assert!(error.contains("Unexpected end of file"), "{error}");
+	// `(a)--(b) RETURN 1` comments out everything after `(a)`, leaving just the
+	// `MATCH (a)` read body with no RETURN — which the parser now accepts (the
+	// missing RETURN is enforced in lowering, not here).
+	let program = crate::opengql::parse_str("MATCH (a)--(b) RETURN 1")
+		.expect("the comment leaves a bare MATCH (a)")
+		.program;
+	assert_eq!(program.steps.len(), 1);
+	assert!(program.ret.is_none());
 
 	// With the RETURN on its own line the query is valid: the pattern is
 	// just `(a)` and the `(b)` is commented away.

@@ -16,23 +16,176 @@
 
 use crate::syn::token::Span;
 
-/// A complete GQL query.
+/// A complete GQL query: a linear program.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GqlQuery {
-	pub stmt: GqlStatement,
+	pub program: LinearQuery,
 }
 
-/// A top-level GQL statement.
+/// A linear query: a sequence of data-accessing steps — `MATCH`/`OPTIONAL`
+/// reads and `INSERT`/`SET`/`REMOVE`/`DELETE` mutations, in any textual order —
+/// and an optional trailing `RETURN`. The binding table threads through the
+/// steps in order (`ambientLinearDataModifyingStatementBody`, GQL.g4:394).
+///
+/// A `MATCH` that follows a mutation re-reads the live (post-mutation) state in
+/// the same write transaction, so a later read observes an earlier write within
+/// the query.
 #[derive(Clone, Debug, PartialEq)]
-pub enum GqlStatement {
-	Match(MatchQuery),
+pub struct LinearQuery {
+	/// The steps in textual order. Empty only for a bare `RETURN` (rejected in
+	/// lowering: a query needs a `MATCH` or a mutation).
+	pub steps: Vec<GqlStep>,
+	/// The trailing `RETURN`, or `None` for a mutation-only query (ISO allows a
+	/// linear data-modifying statement to end without a result statement).
+	pub ret: Option<ReturnClause>,
+	pub span: Span,
 }
 
-/// A linear query: one or more MATCH items followed by a RETURN clause.
+/// One step of a [`LinearQuery`]: a read clause or a data-modifying statement.
 #[derive(Clone, Debug, PartialEq)]
-pub struct MatchQuery {
-	pub items: Vec<MatchItem>,
-	pub ret: ReturnClause,
+pub enum GqlStep {
+	/// A `MATCH` clause or `OPTIONAL` operand (a `simpleQueryStatement`).
+	Read(MatchItem),
+	/// An `INSERT`/`SET`/`REMOVE`/`DELETE` (a `simpleDataModifyingStatement`).
+	Mutate(MutationStatement),
+}
+
+/// A GQL data-modifying statement (`primitiveDataModifyingStatement`,
+/// GQL.g4:412).
+#[derive(Clone, Debug, PartialEq)]
+pub enum MutationStatement {
+	/// `INSERT <insertGraphPattern>`
+	Insert(InsertStatement),
+	/// `SET setItem (, setItem)*`
+	Set(SetStatement),
+	/// `REMOVE removeItem (, removeItem)*`
+	Remove(RemoveStatement),
+	/// `(DETACH | NODETACH)? DELETE deleteItem (, deleteItem)*`
+	Delete(DeleteStatement),
+}
+
+/// A `SET` statement (`setStatement`, GQL.g4:427).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetStatement {
+	pub items: Vec<SetItem>,
+	pub span: Span,
+}
+
+/// A single `SET` item (`setItem`, GQL.g4:435).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SetItem {
+	/// `a.p = v` (`setPropertyItem`).
+	Property {
+		var: Ident,
+		prop: Ident,
+		value: GqlExpr,
+		span: Span,
+	},
+	/// `a = { k: v, … }` (`setAllPropertiesItem`).
+	AllProperties {
+		var: Ident,
+		props: Vec<(Ident, GqlExpr)>,
+		span: Span,
+	},
+	/// `a:Label` / `a IS Label` (`setLabelItem`). Parsed in full, rejected in
+	/// lowering (a SurrealDB record belongs to exactly one table).
+	Label {
+		var: Ident,
+		label: Ident,
+		span: Span,
+	},
+}
+
+/// A `REMOVE` statement (`removeStatement`, GQL.g4:455).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoveStatement {
+	pub items: Vec<RemoveItem>,
+	pub span: Span,
+}
+
+/// A single `REMOVE` item (`removeItem`, GQL.g4:463).
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoveItem {
+	/// `a.p` (`removePropertyItem`).
+	Property {
+		var: Ident,
+		prop: Ident,
+		span: Span,
+	},
+	/// `a:Label` / `a IS Label` (`removeLabelItem`). Parsed, rejected in
+	/// lowering.
+	Label {
+		var: Ident,
+		label: Ident,
+		span: Span,
+	},
+}
+
+/// A `DELETE` statement (`deleteStatement`, GQL.g4:478).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeleteStatement {
+	pub detach: DetachMode,
+	/// `deleteItem = valueExpression`; each must lower to a bound variable.
+	pub items: Vec<GqlExpr>,
+	pub span: Span,
+}
+
+/// The detach mode of a `DELETE` (`DETACH`/`NODETACH`, GQL.g4:479). `NoDetach`
+/// is the ISO default: deleting a node that still has connected edges is an
+/// error. `Detach` cascades the connected edges.
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub enum DetachMode {
+	Detach,
+	NoDetach,
+}
+
+/// An `INSERT` statement (`insertStatement`, GQL.g4:421): one or more insert
+/// path patterns describing the nodes and edges to create.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertStatement {
+	pub paths: Vec<InsertPath>,
+	pub span: Span,
+}
+
+/// A single insert path pattern (`insertPathPattern`, GQL.g4:860): a start node
+/// followed by zero or more edge-node steps.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertPath {
+	pub start: InsertNode,
+	pub steps: Vec<(InsertEdge, InsertNode)>,
+	pub span: Span,
+}
+
+/// An insert node pattern (`insertNodePattern`, GQL.g4:864): `(a:Label {k: v})`.
+/// A node with a fresh variable and a label is created; a node that reuses a
+/// `MATCH`-bound variable (no label, no props) references an existing record.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertNode {
+	pub var: Option<Ident>,
+	pub label: Option<Ident>,
+	pub props: Vec<(Ident, GqlExpr)>,
+	pub span: Span,
+}
+
+/// An insert edge pattern (`insertEdgePattern`, GQL.g4:868). Undirected edges
+/// are rejected in the parser.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertEdge {
+	pub var: Option<Ident>,
+	pub label: Option<Ident>,
+	pub direction: InsertEdgeDir,
+	pub props: Vec<(Ident, GqlExpr)>,
+	pub span: Span,
+}
+
+/// The direction of an insert edge (the two directed forms of
+/// `insertEdgePattern`).
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub enum InsertEdgeDir {
+	/// `<-[…]-`
+	Left,
+	/// `-[…]->`
+	Right,
 }
 
 /// A single item in the leading `matchStatement+` of a query

@@ -327,22 +327,12 @@ impl PathExpand {
 
 /// Extract the source `RecordId` from a binding row's source slot.
 ///
-/// The slot holds a full node object whose `id` field is the record id
-/// (V2_DESIGN §3). A bare `RecordId` slot is tolerated defensively. A missing
-/// slot, a `Null`/`None` slot (source dropped — the OPTIONAL interplay arrives
-/// in PR-C), or any other value yields `None` and the operator drops the row.
+/// Thin wrapper over the shared [`crate::exec::operators::binding_record_id`]
+/// (the slot holds a full node object whose `id` field is the record id —
+/// V2_DESIGN §3 — or, defensively, a bare `RecordId`; anything else yields
+/// `None` and the operator drops the row).
 pub(crate) fn source_record_id(row: &Value, source: &str) -> Option<RecordId> {
-	let Value::Object(obj) = row else {
-		return None;
-	};
-	match obj.get(source) {
-		Some(Value::Object(node)) => match node.get("id") {
-			Some(Value::RecordId(rid)) => Some(rid.clone()),
-			_ => None,
-		},
-		Some(Value::RecordId(rid)) => Some(rid.clone()),
-		_ => None,
-	}
+	crate::exec::operators::binding_record_id(row, source)
 }
 
 /// Read the far-endpoint `RecordId` from a fetched edge object's `out`/`in`

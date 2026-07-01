@@ -21,9 +21,12 @@
 //! `optional_group` block id; the planner folds each block (the run of clauses
 //! sharing one id) as a unit via either the OptionalExpand fast path or a
 //! `HashJoin { Left }` over the block's standalone subplan — see
-//! [`Planner::fold_optional`]. Still out of scope and rejected upstream in the
-//! lowering: mutations, path modes, `GROUP BY`, label expressions, undirected
-//! edges.
+//! [`Planner::fold_optional`]. After the read body, the plan's
+//! `mutations` are folded into a chain of write operators
+//! (`UpdateBinding`/`DeleteBinding`/`InsertGraph`, see [`Planner::plan_mutations`]);
+//! a leading `INSERT` with no read body is seeded by a `SingleRowScan`. Still out
+//! of scope and rejected upstream in the lowering: label mutations, label
+//! expressions, undirected edges.
 //!
 //! None of the internal bails here are `PlannerUnsupported`/`PlannerUnimplemented`:
 //! a `MatchPlan` only reaches the planner because it lowered cleanly, so an
@@ -57,14 +60,16 @@ use super::Planner;
 use crate::err::Error;
 use crate::exec::ExecOperator;
 use crate::exec::operators::{
-	Aggregate, AggregateField, Bind, Distinct, DistinctEdges, EdgeBinding, EndpointBind,
-	EndpointField, Expand, ExpandDir, FieldSelection, Filter, HashJoin, JoinType, Limit,
-	OrderByField, PathExpand, PathMode, Project, ShortestPathExpand, ShortestSelector, Sort,
-	SortDirection,
+	Aggregate, AggregateField, Bind, DeleteBinding, Distinct, DistinctEdges, DrainSink,
+	EdgeBinding, EndpointBind, EndpointField, Expand, ExpandDir, FieldSelection, Filter, HashJoin,
+	InsertEdgeOp, InsertGraph, InsertNodeOp, JoinType, Limit, OrderByField, PathExpand, PathMode,
+	Project, ShortestPathExpand, ShortestSelector, SingleRowScan, Sort, SortDirection,
+	UpdateBinding,
 };
 use crate::expr::match_plan::{
-	BindingId, BindingKind, EdgeStep, ExpandDirection, MatchClausePlan, MatchPlan, MatchPredicate,
-	NodeStep, PathMode as IrPathMode, PathPrefixPlan, PathSearch, PatternPlan,
+	BindingId, BindingKind, EdgeStep, ExpandDirection, MatchClausePlan, MatchOutput, MatchPlan,
+	MatchPredicate, MatchStage, MutationStage, NodeStep, PathMode as IrPathMode, PathPrefixPlan,
+	PathSearch, PatternPlan,
 };
 use crate::expr::{Cond, Expr, Function, Idiom, Literal, Part};
 use crate::val::TableName;
@@ -156,59 +161,119 @@ impl<'ctx> Planner<'ctx> {
 	/// sides share, or Cross when they share none (sequential `MATCH` joins
 	/// exactly like comma-separated patterns, R1).
 	pub(crate) async fn plan_match(&self, plan: MatchPlan) -> Result<Arc<dyn ExecOperator>, Error> {
-		if plan.clauses.is_empty() {
-			return Err(Error::Internal(
-				"GQL MATCH planning: a MatchPlan must carry at least one clause".to_string(),
-			));
-		}
-
-		// Walk the clauses in textual order, grouping each `OPTIONAL` block (the
-		// run of consecutive clauses sharing one `optional_group` id) into a single
-		// unit so the all-or-nothing left-join is built over the block as a whole
-		// (R3). A mandatory clause is a unit of one.
-		let units = clause_units(&plan);
+		// Group the ordered stages into fold units: each mandatory read clause is
+		// a unit; a run of read clauses sharing one `optional_group` id is one
+		// OPTIONAL block unit (the all-or-nothing left-join, R3); each write stage
+		// is a mutation unit. Reads and mutations interleave as written — a read
+		// after a write re-scans the live (post-write) state in the same txn.
+		let units = stage_units(&plan);
 		let mut units = units.into_iter();
 
-		// The first unit seeds the accumulator. The lowering guarantees the first
-		// clause is mandatory (an `OPTIONAL` leading the query has nothing to
-		// left-outer against), so the first unit is a single mandatory clause that
-		// can defer nothing.
+		// Seed from the first unit.
 		let Some(first) = units.next() else {
 			return Err(Error::Internal(
-				"GQL MATCH planning: a MatchPlan must carry at least one clause".to_string(),
+				"GQL planning: a MatchPlan must carry at least one stage".to_string(),
 			));
 		};
-		let ClauseUnit::Mandatory(first_clause) = first else {
-			return Err(Error::Internal(
-				"GQL MATCH planning: the first clause of a MatchPlan cannot be OPTIONAL (there is \
-				 nothing to left-outer against); the lowering must reject it"
-					.to_string(),
-			));
+		let (mut acc_op, mut acc_bound) = match first {
+			StageUnit::Mandatory(clause) => {
+				let planned = self.plan_clause(&plan, clause, &[]).await?;
+				debug_assert!(
+					planned.deferred.is_empty(),
+					"GQL planning: the first clause cannot defer predicates (nothing precedes it)",
+				);
+				(planned.operator, planned.bound)
+			}
+			StageUnit::Optional(_) => {
+				return Err(Error::Internal(
+					"GQL planning: a query cannot start with OPTIONAL (the lowering must reject it)"
+						.to_string(),
+				));
+			}
+			StageUnit::Mutation(stage) => {
+				// A leading mutation (an `INSERT` with no preceding `MATCH`): seed a
+				// single empty row so it runs exactly once.
+				let seed = Arc::new(SingleRowScan::new()) as Arc<dyn ExecOperator>;
+				self.fold_mutation(&plan, seed, Vec::new(), stage)
+			}
 		};
-		let first = self.plan_clause(&plan, first_clause, &[]).await?;
-		debug_assert!(
-			first.deferred.is_empty(),
-			"GQL MATCH planning: the first clause cannot defer predicates (nothing precedes it)",
-		);
-		let mut acc_op = first.operator;
-		let mut acc_bound = first.bound;
 
 		// Fold the remaining units.
 		for unit in units {
 			let (op, bound) = match unit {
-				ClauseUnit::Mandatory(clause) => {
+				StageUnit::Mandatory(clause) => {
 					let planned = self.plan_clause(&plan, clause, &acc_bound).await?;
 					self.fold_mandatory(&plan, acc_op, &acc_bound, planned).await?
 				}
-				ClauseUnit::Optional(clauses) => {
+				StageUnit::Optional(clauses) => {
 					self.fold_optional(&plan, acc_op, &acc_bound, &clauses).await?
 				}
+				StageUnit::Mutation(stage) => self.fold_mutation(&plan, acc_op, acc_bound, stage),
 			};
 			acc_op = op;
 			acc_bound = bound;
 		}
 
 		self.plan_match_tail(&plan, acc_op).await
+	}
+
+	/// Build one write operator over the accumulator and return it with the
+	/// updated bound set. `INSERT` extends the bound set with its created node /
+	/// edge bindings, so a later read can join or anchor on them; `SET`/`DELETE`
+	/// leave the bound set unchanged (their target was already bound).
+	fn fold_mutation(
+		&self,
+		plan: &MatchPlan,
+		op: Arc<dyn ExecOperator>,
+		mut bound: Vec<BindingId>,
+		stage: &MutationStage,
+	) -> (Arc<dyn ExecOperator>, Vec<BindingId>) {
+		let op = match stage {
+			MutationStage::Update {
+				target,
+				data,
+			} => {
+				let name = binding_name(plan, *target).to_string();
+				Arc::new(UpdateBinding::new(op, name, data.clone())) as Arc<dyn ExecOperator>
+			}
+			MutationStage::Delete {
+				target,
+				detach,
+			} => {
+				let name = binding_name(plan, *target).to_string();
+				let is_edge = matches!(
+					plan.binding(*target).kind,
+					BindingKind::Edge | BindingKind::EdgeGroup
+				);
+				Arc::new(DeleteBinding::new(op, name, *detach, is_edge)) as Arc<dyn ExecOperator>
+			}
+			MutationStage::Insert(insert) => {
+				let nodes: Vec<InsertNodeOp> = insert
+					.nodes
+					.iter()
+					.map(|n| InsertNodeOp {
+						name: binding_name(plan, n.binding).to_string(),
+						table: n.label.clone(),
+						props: n.props.clone(),
+					})
+					.collect();
+				let edges: Vec<InsertEdgeOp> = insert
+					.edges
+					.iter()
+					.map(|e| InsertEdgeOp {
+						name: binding_name(plan, e.binding).to_string(),
+						table: e.label.clone(),
+						from: binding_name(plan, e.from).to_string(),
+						to: binding_name(plan, e.to).to_string(),
+						props: e.props.clone(),
+					})
+					.collect();
+				bound.extend(insert.nodes.iter().map(|n| n.binding));
+				bound.extend(insert.edges.iter().map(|e| e.binding));
+				Arc::new(InsertGraph::new(op, nodes, edges)) as Arc<dyn ExecOperator>
+			}
+		};
+		(op, bound)
 	}
 
 	/// Combine a freshly-planned mandatory clause with the accumulator.
@@ -1243,30 +1308,35 @@ impl<'ctx> Planner<'ctx> {
 		plan: &MatchPlan,
 		body: Arc<dyn ExecOperator>,
 	) -> Result<Arc<dyn ExecOperator>, Error> {
-		let output = &plan.output;
+		// A mutation-only plan (no `RETURN`) carries no output spec; drive the
+		// mutation chain to completion (the writes happen as its rows are pulled)
+		// and emit no rows, so the query returns an empty result.
+		let Some(output) = plan.output.as_ref() else {
+			return Ok(Arc::new(DrainSink::new(body)) as Arc<dyn ExecOperator>);
+		};
 		if let Some(group_keys) = output.group_by.as_ref() {
-			let mut op = self.plan_match_aggregate(body, plan, group_keys).await?;
+			let mut op = self.plan_match_aggregate(body, output, group_keys).await?;
 			if output.distinct {
 				op = Arc::new(Distinct::new(op)) as Arc<dyn ExecOperator>;
 			}
-			op = self.plan_match_sort(op, plan).await?;
-			op = self.plan_match_limit(op, plan).await?;
+			op = self.plan_match_sort(op, output).await?;
+			op = self.plan_match_limit(op, output).await?;
 			// Drop any sort-only (hidden) columns the lowering materialised for a
 			// non-projected ORDER BY key.
 			if output.columns.iter().any(|c| c.hidden) {
-				op = self.plan_match_drop_hidden(op, plan).await?;
+				op = self.plan_match_drop_hidden(op, output).await?;
 			}
 			Ok(op)
 		} else if output.distinct {
-			let mut op = self.plan_match_project(body, plan).await?;
+			let mut op = self.plan_match_project(body, output).await?;
 			op = Arc::new(Distinct::new(op)) as Arc<dyn ExecOperator>;
-			op = self.plan_match_sort(op, plan).await?;
-			op = self.plan_match_limit(op, plan).await?;
+			op = self.plan_match_sort(op, output).await?;
+			op = self.plan_match_limit(op, output).await?;
 			Ok(op)
 		} else {
-			let mut op = self.plan_match_sort(body, plan).await?;
-			op = self.plan_match_limit(op, plan).await?;
-			op = self.plan_match_project(op, plan).await?;
+			let mut op = self.plan_match_sort(body, output).await?;
+			op = self.plan_match_limit(op, output).await?;
+			op = self.plan_match_project(op, output).await?;
 			Ok(op)
 		}
 	}
@@ -1283,7 +1353,7 @@ impl<'ctx> Planner<'ctx> {
 	async fn plan_match_aggregate(
 		&self,
 		input: Arc<dyn ExecOperator>,
-		plan: &MatchPlan,
+		output: &MatchOutput,
 		group_keys: &[Expr],
 	) -> Result<Arc<dyn ExecOperator>, Error> {
 		use surrealdb_types::ToSql;
@@ -1304,8 +1374,8 @@ impl<'ctx> Planner<'ctx> {
 			})
 			.collect();
 
-		let mut aggregates = Vec::with_capacity(plan.output.columns.len());
-		for column in plan.output.columns.iter() {
+		let mut aggregates = Vec::with_capacity(output.columns.len());
+		for column in output.columns.iter() {
 			if let Some(idx) = group_keys.iter().position(|k| *k == column.expr) {
 				// A grouping key column: passed through from the group key vector.
 				aggregates.push(AggregateField::new(
@@ -1349,10 +1419,10 @@ impl<'ctx> Planner<'ctx> {
 	async fn plan_match_drop_hidden(
 		&self,
 		input: Arc<dyn ExecOperator>,
-		plan: &MatchPlan,
+		output: &MatchOutput,
 	) -> Result<Arc<dyn ExecOperator>, Error> {
 		let mut fields = Vec::new();
-		for column in plan.output.columns.iter().filter(|c| !c.hidden) {
+		for column in output.columns.iter().filter(|c| !c.hidden) {
 			let expr = self.physical_expr(Expr::Idiom(Idiom::field(column.name.clone()))).await?;
 			fields.push(FieldSelection::new(&column.name, expr));
 		}
@@ -1364,13 +1434,13 @@ impl<'ctx> Planner<'ctx> {
 	async fn plan_match_sort(
 		&self,
 		input: Arc<dyn ExecOperator>,
-		plan: &MatchPlan,
+		output: &MatchOutput,
 	) -> Result<Arc<dyn ExecOperator>, Error> {
-		if plan.output.order.is_empty() {
+		if output.order.is_empty() {
 			return Ok(input);
 		}
-		let mut order_by = Vec::with_capacity(plan.output.order.len());
-		for order in plan.output.order.iter() {
+		let mut order_by = Vec::with_capacity(output.order.len());
+		for order in output.order.iter() {
 			let expr = self.physical_expr(order.expr.clone()).await?;
 			order_by.push(OrderByField {
 				expr,
@@ -1391,13 +1461,13 @@ impl<'ctx> Planner<'ctx> {
 	async fn plan_match_limit(
 		&self,
 		input: Arc<dyn ExecOperator>,
-		plan: &MatchPlan,
+		output: &MatchOutput,
 	) -> Result<Arc<dyn ExecOperator>, Error> {
-		let limit = match plan.output.limit.as_ref() {
+		let limit = match output.limit.as_ref() {
 			Some(e) => Some(self.physical_expr(e.clone()).await?),
 			None => None,
 		};
-		let offset = match plan.output.skip.as_ref() {
+		let offset = match output.skip.as_ref() {
 			Some(e) => Some(self.physical_expr(e.clone()).await?),
 			None => None,
 		};
@@ -1413,10 +1483,10 @@ impl<'ctx> Planner<'ctx> {
 	async fn plan_match_project(
 		&self,
 		input: Arc<dyn ExecOperator>,
-		plan: &MatchPlan,
+		output: &MatchOutput,
 	) -> Result<Arc<dyn ExecOperator>, Error> {
-		let mut fields = Vec::with_capacity(plan.output.columns.len());
-		for column in plan.output.columns.iter() {
+		let mut fields = Vec::with_capacity(output.columns.len());
+		for column in output.columns.iter() {
 			let expr = self.physical_expr(column.expr.clone()).await?;
 			fields.push(FieldSelection::new(&column.name, expr));
 		}
@@ -1553,35 +1623,44 @@ fn difference_bindings(a: &[BindingId], b: &[BindingId]) -> Vec<BindingId> {
 /// One fold unit: a single mandatory clause, or a whole `OPTIONAL` block (the run
 /// of consecutive clauses sharing one `optional_group` id, left-joined as a unit,
 /// R3).
-enum ClauseUnit<'p> {
+enum StageUnit<'p> {
 	Mandatory(&'p MatchClausePlan),
 	Optional(Vec<&'p MatchClausePlan>),
+	Mutation(&'p MutationStage),
 }
 
-/// Group a plan's clauses (textual order) into fold units: each mandatory clause
-/// is its own unit; consecutive clauses sharing one `optional_group` id collapse
-/// into one [`ClauseUnit::Optional`] (the all-or-nothing block). The lowering
-/// mints block ids densely in textual order, so a block's clauses are always
-/// adjacent and a simple run-grouping recovers the blocks exactly.
-fn clause_units(plan: &MatchPlan) -> Vec<ClauseUnit<'_>> {
-	let mut units: Vec<ClauseUnit<'_>> = Vec::new();
+/// Group a plan's stages (textual order) into fold units: each mandatory read
+/// clause is its own unit; consecutive read clauses sharing one `optional_group`
+/// id collapse into one [`StageUnit::Optional`] (the all-or-nothing block); each
+/// write stage is a [`StageUnit::Mutation`] and breaks any optional run. The
+/// lowering mints block ids densely in textual order and an `OPTIONAL` block
+/// never contains a mutation, so a block's clauses are always adjacent and a
+/// simple run-grouping recovers the blocks exactly.
+fn stage_units(plan: &MatchPlan) -> Vec<StageUnit<'_>> {
+	let mut units: Vec<StageUnit<'_>> = Vec::new();
 	let mut current_group: Option<u32> = None;
-	for clause in plan.clauses.iter() {
-		match clause.optional_group {
-			Some(group) => {
-				if current_group == Some(group)
-					&& let Some(ClauseUnit::Optional(block)) = units.last_mut()
-				{
-					// Same block as the previous clause: extend it.
-					block.push(clause);
-				} else {
-					// A new optional block.
-					units.push(ClauseUnit::Optional(vec![clause]));
-					current_group = Some(group);
+	for stage in plan.stages.iter() {
+		match stage {
+			MatchStage::Read(clause) => match clause.optional_group {
+				Some(group) => {
+					if current_group == Some(group)
+						&& let Some(StageUnit::Optional(block)) = units.last_mut()
+					{
+						// Same block as the previous clause: extend it.
+						block.push(clause);
+					} else {
+						// A new optional block.
+						units.push(StageUnit::Optional(vec![clause]));
+						current_group = Some(group);
+					}
 				}
-			}
-			None => {
-				units.push(ClauseUnit::Mandatory(clause));
+				None => {
+					units.push(StageUnit::Mandatory(clause));
+					current_group = None;
+				}
+			},
+			MatchStage::Mutate(mutation) => {
+				units.push(StageUnit::Mutation(mutation));
 				current_group = None;
 			}
 		}
@@ -1759,6 +1838,20 @@ mod tests {
 
 	// ---- shared builders ----
 
+	/// Wrap read clauses as the plan's [`MatchStage::Read`] steps (these planner
+	/// builders are all read-only).
+	fn stages_of(clauses: Vec<MatchClausePlan>) -> Vec<MatchStage> {
+		clauses.into_iter().map(MatchStage::Read).collect()
+	}
+
+	/// Mutable access to the read clause at step `i` (panics if it is not a read).
+	fn clause_mut(plan: &mut MatchPlan, i: usize) -> &mut MatchClausePlan {
+		match &mut plan.stages[i] {
+			MatchStage::Read(c) => c,
+			MatchStage::Mutate(_) => panic!("stage {i} is not a read clause"),
+		}
+	}
+
 	fn binding(name: &str, kind: BindingKind, user_named: bool) -> BindingDef {
 		BindingDef {
 			name: name.to_string(),
@@ -1820,15 +1913,15 @@ mod tests {
 		}
 	}
 
-	fn out_columns(cols: Vec<MatchColumn>) -> MatchOutput {
-		MatchOutput {
+	fn out_columns(cols: Vec<MatchColumn>) -> Option<MatchOutput> {
+		Some(MatchOutput {
 			columns: cols,
 			distinct: false,
 			group_by: None,
 			order: Vec::new(),
 			skip: None,
 			limit: None,
-		}
+		})
 	}
 
 	// ---- worked tree (i): single pattern, edge predicate ----
@@ -1836,7 +1929,7 @@ mod tests {
 	fn plan_tree_i() -> MatchPlan {
 		MatchPlan {
 			bindings: vec![node("a"), edge("k"), node("b")],
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![PatternPlan {
 					path_var: None,
@@ -1855,7 +1948,7 @@ mod tests {
 					},
 					deps: vec![1],
 				}],
-			}],
+			}]),
 			output: out_columns(vec![
 				col("a_name", field_path("a", "name")),
 				col("b_name", field_path("b", "name")),
@@ -1873,7 +1966,7 @@ mod tests {
 				node("b"),
 				node("p"),
 			],
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![PatternPlan {
 					path_var: Some(3),
@@ -1893,8 +1986,8 @@ mod tests {
 					)],
 				}],
 				predicates: Vec::new(),
-			}],
-			output: MatchOutput {
+			}]),
+			output: Some(MatchOutput {
 				columns: vec![col("p", var("p")), col("b", var("b"))],
 				distinct: false,
 				group_by: None,
@@ -1904,7 +1997,7 @@ mod tests {
 				}],
 				skip: None,
 				limit: None,
-			},
+			}),
 		}
 	}
 
@@ -1920,7 +2013,7 @@ mod tests {
 				node("c"),
 				hidden_edge("__e1"),
 			],
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![
 					// (a)-[:x]->(b)
@@ -1945,7 +2038,7 @@ mod tests {
 					},
 				],
 				predicates: Vec::new(),
-			}],
+			}]),
 			output: out_columns(vec![col("a", var("a")), col("c", var("c"))]),
 		}
 	}
@@ -1956,7 +2049,7 @@ mod tests {
 		MatchPlan {
 			// 0=a, 1=k, 2=b, 3=c, 4=k2
 			bindings: vec![node("a"), edge("k"), node("b"), node("c"), edge("k2")],
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![
 					PatternPlan {
@@ -1979,7 +2072,7 @@ mod tests {
 					},
 				],
 				predicates: Vec::new(),
-			}],
+			}]),
 			output: out_columns(vec![col("a", var("a")), col("c", var("c"))]),
 		}
 	}
@@ -2001,7 +2094,7 @@ mod tests {
 				edge("k2"),
 				node("c"),
 			],
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![
 					// (a:person)-[__e0:knows]->{1,1}(b:person)
@@ -2034,7 +2127,7 @@ mod tests {
 					},
 				],
 				predicates: Vec::new(),
-			}],
+			}]),
 			output: out_columns(vec![col("b", var("b")), col("c", var("c"))]),
 		}
 	}
@@ -2045,7 +2138,7 @@ mod tests {
 		MatchPlan {
 			// 0=a, 1=k, 2=b, 3=k2, 4=c
 			bindings: vec![node("a"), edge("k"), node("b"), edge("k2"), node("c")],
-			clauses: vec![
+			stages: stages_of(vec![
 				MatchClausePlan {
 					optional_group: None,
 					patterns: vec![PatternPlan {
@@ -2072,7 +2165,7 @@ mod tests {
 					}],
 					predicates: Vec::new(),
 				},
-			],
+			]),
 			output: out_columns(vec![col("a", var("a")), col("c", var("c"))]),
 		}
 	}
@@ -2168,7 +2261,7 @@ Project [ctx: Db]
 		// A SHORTEST selector routes the quantified step to `ShortestPathExpand`,
 		// carrying the selector and (non-default) path mode.
 		let mut plan = plan_tree_iv();
-		plan.clauses[0].patterns[0].search = Some(PathPrefixPlan {
+		clause_mut(&mut plan, 0).patterns[0].search = Some(PathPrefixPlan {
 			search: PathSearch::AllShortest,
 			mode: IrPathMode::Acyclic,
 		});
@@ -2183,7 +2276,7 @@ Project [ctx: Db]
 		// `ANY [k]` routes to the bounded `ShortestPathExpand` (a shortest
 		// representative is a valid arbitrary path), labelled `search: any`.
 		let mut plan = plan_tree_iv();
-		plan.clauses[0].patterns[0].search = Some(PathPrefixPlan {
+		clause_mut(&mut plan, 0).patterns[0].search = Some(PathPrefixPlan {
 			search: PathSearch::Any {
 				count: 3,
 			},
@@ -2292,7 +2385,7 @@ Project [ctx: Db]
 		MatchPlan {
 			// 0=a, 1=k, 2=b
 			bindings: vec![node("a"), edge("k"), node("b")],
-			clauses: vec![
+			stages: stages_of(vec![
 				MatchClausePlan {
 					optional_group: None,
 					patterns: vec![PatternPlan {
@@ -2316,7 +2409,7 @@ Project [ctx: Db]
 					}],
 					predicates: Vec::new(),
 				},
-			],
+			]),
 			output: out_columns(vec![
 				col("a_name", field_path("a", "name")),
 				col("b_name", field_path("b", "name")),
@@ -2338,7 +2431,7 @@ Project [ctx: Db]
 		MatchPlan {
 			// 0=a, 1=__e0 (hidden knows), 2=b, 3=k2, 4=c
 			bindings: vec![node("a"), hidden_edge("__e0"), node("b"), edge("k2"), node("c")],
-			clauses: vec![
+			stages: stages_of(vec![
 				MatchClausePlan {
 					optional_group: None,
 					patterns: vec![PatternPlan {
@@ -2378,7 +2471,7 @@ Project [ctx: Db]
 					}],
 					predicates: Vec::new(),
 				},
-			],
+			]),
 			output: out_columns(vec![col("a", var("a"))]),
 		}
 	}
@@ -2402,7 +2495,7 @@ Project [ctx: Db]
 				hidden_edge("__e1"),
 				node("c"),
 			],
-			clauses: vec![
+			stages: stages_of(vec![
 				MatchClausePlan {
 					optional_group: None,
 					patterns: vec![PatternPlan {
@@ -2439,7 +2532,7 @@ Project [ctx: Db]
 					}],
 					predicates: Vec::new(),
 				},
-			],
+			]),
 			output: out_columns(vec![col("a", var("a"))]),
 		}
 	}
@@ -2461,7 +2554,7 @@ Project [ctx: Db]
 				hidden_edge("__e1"),
 				node("c"),
 			],
-			clauses: vec![
+			stages: stages_of(vec![
 				MatchClausePlan {
 					optional_group: None,
 					patterns: vec![
@@ -2504,7 +2597,7 @@ Project [ctx: Db]
 					],
 					predicates: Vec::new(),
 				},
-			],
+			]),
 			output: out_columns(vec![col("a", var("a"))]),
 		}
 	}
@@ -2643,7 +2736,7 @@ Project [ctx: Db]
 		};
 		let plan = MatchPlan {
 			bindings: vec![node("a"), hidden_edge("e"), node("b")],
-			clauses: Vec::new(),
+			stages: Vec::new(),
 			output: out_columns(Vec::new()),
 		};
 		// Start node shared.

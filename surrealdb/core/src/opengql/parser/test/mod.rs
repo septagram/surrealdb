@@ -5,9 +5,9 @@
 //! smoke tests asserting the core parse shapes and targeted errors.
 
 use crate::opengql::ast::{
-	BinaryOp, EdgeDirection, ElementPredicate, GqlExpr, GqlLiteral, GqlQuery, GqlStatement,
-	LabelExpr, MatchClause, MatchItem, MatchQuery, QuantifierKind, ReturnItem, ReturnItems,
-	SetQuantifier, TruthValue, UnaryOp,
+	BinaryOp, EdgeDirection, ElementPredicate, GqlExpr, GqlLiteral, GqlStep, LabelExpr,
+	MatchClause, MatchItem, QuantifierKind, ReturnClause, ReturnItem, ReturnItems, SetQuantifier,
+	TruthValue, UnaryOp,
 };
 use crate::opengql::{GqlParserSettings, parse_str, parse_with_settings};
 
@@ -16,23 +16,43 @@ mod limits;
 mod pattern;
 mod stmt;
 
-fn parse(source: &str) -> MatchQuery {
-	let query = match parse_str(source) {
-		Ok(x) => x,
-		Err(e) => panic!("failed to parse {source:?}: {:?}", e.render_on(source)),
-	};
-	let GqlQuery {
-		stmt: GqlStatement::Match(query),
-	} = query;
-	query
+/// A test-only view over a parsed read query, mirroring the pre-mutation
+/// `MatchQuery` shape (`items` + a mandatory `ret`) so the parser
+/// statement/pattern tests keep their `query.items` / `query.ret` ergonomics.
+/// The linear query now also carries mutation statements and an optional
+/// `RETURN`; those are exercised by dedicated tests via [`parse_str`].
+struct ParsedQuery {
+	items: Vec<MatchItem>,
+	ret: ReturnClause,
 }
 
-/// Returns the plain `MATCH` clauses of a parsed query, asserting every item
-/// is a plain (non-`OPTIONAL`) clause. Most statement and pattern tests build
-/// queries with no `OPTIONAL` items, so this keeps their `[i]` indexing into
-/// the clause list ergonomic.
+fn parse(source: &str) -> ParsedQuery {
+	let program = match parse_str(source) {
+		Ok(x) => x.program,
+		Err(e) => panic!("failed to parse {source:?}: {:?}", e.render_on(source)),
+	};
+	let items = program
+		.steps
+		.into_iter()
+		.map(|step| match step {
+			GqlStep::Read(item) => item,
+			GqlStep::Mutate(_) => {
+				panic!("this parser test helper only supports read-only queries; use `parse_str`")
+			}
+		})
+		.collect();
+	ParsedQuery {
+		items,
+		ret: program.ret.expect("these parser tests use queries ending in a RETURN clause"),
+	}
+}
+
+/// Returns the plain `MATCH` clauses of a parsed query's read body, asserting
+/// every item is a plain (non-`OPTIONAL`) clause. Most statement and pattern
+/// tests build queries with no `OPTIONAL` items, so this keeps their `[i]`
+/// indexing into the clause list ergonomic.
 #[track_caller]
-fn match_clauses(query: &MatchQuery) -> Vec<&MatchClause> {
+fn match_clauses(query: &ParsedQuery) -> Vec<&MatchClause> {
 	query
 		.items
 		.iter()
@@ -499,10 +519,7 @@ fn targeted_errors() {
 		parse_err("MATCH (a)-[k]->(b)-[j]-> RETURN 1")
 			.contains("expected a node pattern after this edge pattern")
 	);
-	assert!(
-		parse_err("INSERT (a:person) RETURN 1")
-			.contains("GQL write statements are not supported in this version (read-only)")
-	);
+	// (INSERT/SET/REMOVE/DELETE now parse — see `mutation_statements_parse`.)
 	assert!(parse_err("MATCH (a) RETURN a UNION MATCH (b) RETURN b").contains("Composite queries"));
 	// GROUP BY now parses (the lowering enforces its shape); a misplaced GROUP
 	// after a page clause is still rejected.

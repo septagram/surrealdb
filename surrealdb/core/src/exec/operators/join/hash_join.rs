@@ -69,6 +69,19 @@
 //! more rows than either side holds) is bounded by `SURREAL_GQL_MAX_OUTPUT_ROWS`;
 //! the probe loop also polls cancellation between batches so a runaway join is
 //! interruptible.
+//!
+//! ## Read-after-write ordering (interleaved GQL mutations)
+//!
+//! When one side carries a GQL write stage upstream (a `MATCH … SET/DELETE/INSERT
+//! … MATCH/OPTIONAL …` program), the *other* side must read the post-write state,
+//! and the writing side must drain before the reading side opens its scan cursors
+//! (the read-only buffering opens them eagerly at construction time). The normal
+//! build-then-probe order already lands a mutating BUILD's writes before the probe
+//! reads (so the probe is merely constructed lazily, after the build drains); a
+//! mutating PROBE (the `OPTIONAL` left-join shape) is instead PRE-DRAINED — which,
+//! since the mutation operators are pipeline breakers, executes its writes — and
+//! its rows buffered (bounded by the same build budget) before the build is
+//! constructed and the buffered rows replayed. See `execute`.
 
 // The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
 // planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
@@ -165,6 +178,38 @@ impl HashJoin {
 	}
 }
 
+/// One side of a `HashJoin` (build or probe): the child operator plus its
+/// pre-read buffering inputs. `execute` constructs each side's stream through
+/// this so it can choose to build a side eagerly (up front, for read-only
+/// pipeline parallelism) or lazily inside the stream (after the *other*,
+/// mutating side has drained — see the read-after-write ordering notes in
+/// `execute`) without juggling parallel `op`/`access`/`card` locals.
+struct JoinSide {
+	op: Arc<dyn ExecOperator>,
+	access: AccessMode,
+	card: CardinalityHint,
+}
+
+impl JoinSide {
+	fn new(op: &Arc<dyn ExecOperator>) -> Self {
+		Self {
+			op: Arc::clone(op),
+			access: op.access_mode(),
+			card: op.cardinality_hint(),
+		}
+	}
+
+	/// Whether this side carries a GQL write stage upstream.
+	fn mutates(&self) -> bool {
+		self.access.is_read_write()
+	}
+
+	/// Construct and buffer this side's stream (lazy until first polled).
+	fn stream(&self, ctx: &ExecutionContext, buffer_size: usize) -> FlowResult<ValueBatchStream> {
+		Ok(buffer_stream(self.op.execute(ctx)?, self.access, self.card, buffer_size))
+	}
+}
+
 impl ExecOperator for HashJoin {
 	fn name(&self) -> &'static str {
 		"HashJoin"
@@ -223,18 +268,50 @@ impl ExecOperator for HashJoin {
 	}
 
 	fn execute(&self, ctx: &ExecutionContext) -> FlowResult<ValueBatchStream> {
-		let build_stream = buffer_stream(
-			self.build.execute(ctx)?,
-			self.build.access_mode(),
-			self.build.cardinality_hint(),
-			ctx.root().ctx.config.operator_buffer_size,
-		);
-		let probe_stream = buffer_stream(
-			self.probe.execute(ctx)?,
-			self.probe.access_mode(),
-			self.probe.cardinality_hint(),
-			ctx.root().ctx.config.operator_buffer_size,
-		);
+		// Read-after-write ordering. The join always drains the build side fully
+		// (build phase) before streaming the probe (probe phase). When one side
+		// mutates — a GQL write stage upstream of this join
+		// (`MATCH … SET/DELETE/INSERT … MATCH/OPTIONAL …`) — the OTHER side must
+		// observe those writes, so the WRITING side must drain before the READING
+		// side is constructed: the read-only buffering strategy opens scan cursors
+		// *eagerly at construction time* (for pipeline parallelism), and that eager
+		// read is buried throughout the subtree (every read-only operator buffers
+		// its child), so it cannot be defeated by buffering choices at this level
+		// alone. The mutation operators are pipeline breakers, so draining the
+		// mutating side executes its writes. Three cases:
+		//
+		//  - build mutates, probe reads (mandatory `MATCH` after a write — `fold_mandatory` puts
+		//    the mutating accumulator on the build side): the natural build-then-probe order
+		//    already lands the writes first; just DEFER the probe's construction so its cursors
+		//    open post-write.
+		//  - probe mutates, build reads (an `OPTIONAL` block after a write — `fold_optional`'s
+		//    left-join path puts the mutating accumulator on the probe side and the read-only block
+		//    on the build side): the build would otherwise drain (read) before the probe's write
+		//    runs. So PRE-DRAIN the probe (executing its writes), THEN construct the build
+		//    (post-write), then replay the buffered probe rows in the probe phase.
+		//  - neither mutates: construct both eagerly (one shared snapshot, so overlapping the reads
+		//    is safe and faster).
+		let buffer_size = ctx.root().ctx.config.operator_buffer_size;
+		let build = JoinSide::new(&self.build);
+		let probe = JoinSide::new(&self.probe);
+		let probe_first = probe.mutates() && !build.mutates();
+
+		// Eagerly construct a side only when doing so is safe — i.e. it neither
+		// reads pre-write data nor is the pre-drained writer. The build is eager
+		// unless it must read post-write state (`probe_first`); the probe is eager
+		// unless it must read post-write state (`build.mutates()`) or it is the
+		// pre-drained writer (`probe_first`). Anything left `None` is constructed
+		// lazily inside the stream, after the writing side has drained.
+		let eager_build = if probe_first {
+			None
+		} else {
+			Some(build.stream(ctx, buffer_size)?)
+		};
+		let eager_probe = if build.mutates() || probe_first {
+			None
+		} else {
+			Some(probe.stream(ctx, buffer_size)?)
+		};
 
 		let keys = self.keys.clone();
 		let join_type = self.join_type;
@@ -245,7 +322,44 @@ impl ExecOperator for HashJoin {
 		let ctx = ctx.clone();
 
 		let joined = async_stream::try_stream! {
+			// ---- Pre-drain phase (`probe_first` only): drain the mutating probe so
+			// its writes land before the reading build side is constructed. The
+			// probe is a pipeline breaker, so draining it executes all of its
+			// writes; its rows are buffered and replayed in the probe phase below.
+			// (Re-executing the probe instead would re-run the mutation, so the rows
+			// must be materialised from this single drain — bounded by the same
+			// build-row budget.)
+			let prebuffered_probe: Option<Vec<ValueBatch>> = if probe_first {
+				let probe_stream = probe.stream(&ctx, buffer_size)?;
+				futures::pin_mut!(probe_stream);
+				let mut batches: Vec<ValueBatch> = Vec::new();
+				let mut total: usize = 0;
+				while let Some(batch_result) = probe_stream.next().await {
+					crate::exec::operators::check_cancelled(&ctx)?;
+					let batch = batch_result?;
+					total += batch.values.len();
+					if total > max_rows {
+						Err(ControlFlow::Err(anyhow::anyhow!(crate::err::Error::InvalidStatement(
+							format!(
+								"GQL MATCH join exceeded the maximum of {max_rows} buffered \
+								 probe-side rows (configurable via SURREAL_GQL_MAX_JOIN_BUILD_ROWS)"
+							),
+						))))?;
+					}
+					batches.push(batch);
+				}
+				Some(batches)
+			} else {
+				None
+			};
+
 			// ---- Build phase: drain the build side fully into the hash table.
+			// Constructed now (after the probe pre-drain when `probe_first`) so a
+			// post-write build reads the live transaction state.
+			let build_stream = match eager_build {
+				Some(stream) => stream,
+				None => build.stream(&ctx, buffer_size)?,
+			};
 			let mut table = BuildTable::new();
 			futures::pin_mut!(build_stream);
 			while let Some(batch_result) = build_stream.next().await {
@@ -264,6 +378,16 @@ impl ExecOperator for HashJoin {
 			}
 
 			// ---- Probe phase: stream the probe side, emitting matches.
+			// Either replay the pre-drained (post-write) probe rows, or construct
+			// the probe now — deferred past the build phase when `build_mutates` so
+			// its scans read the live, post-write transaction state.
+			let probe_stream: ValueBatchStream = match prebuffered_probe {
+				Some(batches) => Box::pin(futures::stream::iter(batches.into_iter().map(Ok))),
+				None => match eager_probe {
+					Some(stream) => stream,
+					None => probe.stream(&ctx, buffer_size)?,
+				},
+			};
 			// `base_eval` evaluates the residual (ON) predicate against each merged
 			// row; `emitted` bounds the cumulative output (a Cross product or a
 			// high-fan-out equi-join can emit far more rows than either side holds).

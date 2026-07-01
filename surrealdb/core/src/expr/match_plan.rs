@@ -7,14 +7,9 @@
 //!
 //! See `doc/opengql/V2_DESIGN.md` §2 for the normative contract.
 
-// The IR is constructed by the GQL lowering and consumed by the streaming
-// planner; both land as sibling pieces of PR-A, so some constructors,
-// accessors, and enum variants have no in-crate caller yet.
-#![allow(dead_code)]
-
 use surrealdb_types::{SqlFormat, ToSql};
 
-use crate::expr::Expr;
+use crate::expr::{Expr, Idiom};
 use crate::val::TableName;
 
 /// Index into [`MatchPlan::bindings`]; identifies a binding by position.
@@ -43,9 +38,115 @@ pub(crate) type BindingId = u32;
 pub(crate) struct MatchPlan {
 	/// All bindings; index equals the [`BindingId`].
 	pub(crate) bindings: Vec<BindingDef>,
-	/// Clauses in textual order; always at least one.
-	pub(crate) clauses: Vec<MatchClausePlan>,
-	pub(crate) output: MatchOutput,
+	/// The query's steps in textual order: read clauses and write stages,
+	/// interleaved as written. May be empty only for a bare `RETURN` (rejected
+	/// in lowering).
+	pub(crate) stages: Vec<MatchStage>,
+	/// The `RETURN` projection, or `None` for a mutation-only query (no
+	/// trailing `RETURN`).
+	pub(crate) output: Option<MatchOutput>,
+}
+
+impl MatchPlan {
+	/// Whether this plan carries any write stage. Drives the transaction type
+	/// (a mutation-bearing plan is not read-only, so the executor opens a write
+	/// transaction) — see `Expr::read_only`.
+	pub(crate) fn has_mutations(&self) -> bool {
+		self.stages.iter().any(|s| matches!(s, MatchStage::Mutate(_)))
+	}
+}
+
+/// One step of a lowered query, in textual order: a read clause that extends the
+/// binding table, or a write stage that mutates it. A read clause after a write
+/// re-reads the live (post-write) state in the same transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MatchStage {
+	/// A `MATCH`/`OPTIONAL` clause.
+	Read(MatchClausePlan),
+	/// A write stage applied to the binding table.
+	Mutate(MutationStage),
+}
+
+/// One write stage applied to the binding table, in textual order.
+///
+/// A stage consumes the binding rows produced by earlier steps (or a single
+/// empty row, for a leading `INSERT`), performs its write through the native
+/// document pipeline, and passes the rows on so a trailing `RETURN` can
+/// project the post-mutation state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MutationStage {
+	/// `SET a.p = v` / `SET a = {…}` / `REMOVE a.p`: mutate the record bound at
+	/// `target`.
+	Update {
+		target: BindingId,
+		data: UpdateData,
+	},
+	/// `[DETACH|NODETACH] DELETE a`: delete the record bound at `target`.
+	Delete {
+		target: BindingId,
+		detach: DetachMode,
+	},
+	/// `INSERT …`: create the new nodes and relate the new edges.
+	Insert(InsertStage),
+}
+
+/// The data a [`MutationStage::Update`] applies. Every [`Expr`] is binding-row
+/// scoped (the same `a.x → Idiom[Field("a"),Field("x")]` rule the read side
+/// uses) and is evaluated against the current binding row before the write.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum UpdateData {
+	/// `SET a.p = v` (one assignment per item): set each field path.
+	Set(Vec<(Idiom, Expr)>),
+	/// `REMOVE a.p` (one path per item): unset each field.
+	Unset(Vec<Idiom>),
+	/// `SET a = {…}`: replace all user properties with the object expression
+	/// (the record's `id`, and an edge's `in`/`out`, are preserved by the
+	/// native `CONTENT` path).
+	Content(Expr),
+}
+
+/// The detach mode of a [`MutationStage::Delete`]. `NoDetach` (the ISO default)
+/// errors if the node still has connected edges; `Detach` cascades them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum DetachMode {
+	Detach,
+	NoDetach,
+}
+
+/// An `INSERT` write stage: the new nodes to create (in creation order) and the
+/// edges to relate once their endpoints exist.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct InsertStage {
+	pub(crate) nodes: Vec<InsertNodePlan>,
+	pub(crate) edges: Vec<InsertEdgePlan>,
+}
+
+/// A new node created by an `INSERT` stage.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct InsertNodePlan {
+	/// The binding the created record is bound under.
+	pub(crate) binding: BindingId,
+	/// The target table (= label).
+	pub(crate) label: TableName,
+	/// The property object expression (binding-row scoped), evaluated per row.
+	pub(crate) props: Expr,
+}
+
+/// A new edge related by an `INSERT` stage between two node bindings (each of
+/// which is either a node created by this stage or one already bound by the
+/// read body).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct InsertEdgePlan {
+	/// The binding the created edge record is bound under.
+	pub(crate) binding: BindingId,
+	/// The edge table (= label).
+	pub(crate) label: TableName,
+	/// The source endpoint node binding.
+	pub(crate) from: BindingId,
+	/// The target endpoint node binding.
+	pub(crate) to: BindingId,
+	/// The property object expression (binding-row scoped), evaluated per row.
+	pub(crate) props: Expr,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -270,34 +371,30 @@ impl ExpandDirection {
 /// textually diffable. The rendering is single-line regardless of `fmt`.
 impl ToSql for MatchPlan {
 	fn fmt_sql(&self, f: &mut String, _fmt: SqlFormat) {
-		for clause in self.clauses.iter() {
-			if clause.is_optional() {
-				f.push_str("OPTIONAL ");
+		// Steps render in textual order, space-separated (reads and mutations
+		// interleaved as written).
+		for (i, stage) in self.stages.iter().enumerate() {
+			if i > 0 {
+				f.push(' ');
 			}
-			f.push_str("MATCH ");
-			for (i, pattern) in clause.patterns.iter().enumerate() {
-				if i > 0 {
-					f.push_str(", ");
-				}
-				self.render_pattern(f, pattern);
+			match stage {
+				MatchStage::Read(clause) => self.render_clause(f, clause),
+				MatchStage::Mutate(mutation) => self.render_mutation(f, mutation),
 			}
-			if !clause.predicates.is_empty() {
-				f.push_str(" WHERE ");
-				for (i, predicate) in clause.predicates.iter().enumerate() {
-					if i > 0 {
-						f.push_str(" AND ");
-					}
-					predicate.expr.fmt_sql(f, SqlFormat::SingleLine);
-				}
-			}
-			f.push(' ');
 		}
 
+		let Some(output) = self.output.as_ref() else {
+			return;
+		};
+
+		if !self.stages.is_empty() {
+			f.push(' ');
+		}
 		f.push_str("RETURN");
-		if self.output.distinct {
+		if output.distinct {
 			f.push_str(" DISTINCT");
 		}
-		for (i, column) in self.output.columns.iter().enumerate() {
+		for (i, column) in output.columns.iter().enumerate() {
 			if i > 0 {
 				f.push(',');
 			}
@@ -309,7 +406,7 @@ impl ToSql for MatchPlan {
 
 		// `Some([])` is `GROUP ALL` and renders nothing extra (the aggregates in
 		// the columns already imply it); `Some(keys)` renders `GROUP BY …`.
-		if let Some(keys) = self.output.group_by.as_ref()
+		if let Some(keys) = output.group_by.as_ref()
 			&& !keys.is_empty()
 		{
 			f.push_str(" GROUP BY");
@@ -322,9 +419,9 @@ impl ToSql for MatchPlan {
 			}
 		}
 
-		if !self.output.order.is_empty() {
+		if !output.order.is_empty() {
 			f.push_str(" ORDER BY");
-			for (i, order) in self.output.order.iter().enumerate() {
+			for (i, order) in output.order.iter().enumerate() {
 				if i > 0 {
 					f.push(',');
 				}
@@ -338,11 +435,11 @@ impl ToSql for MatchPlan {
 			}
 		}
 
-		if let Some(skip) = self.output.skip.as_ref() {
+		if let Some(skip) = output.skip.as_ref() {
 			f.push_str(" SKIP ");
 			skip.fmt_sql(f, SqlFormat::SingleLine);
 		}
-		if let Some(limit) = self.output.limit.as_ref() {
+		if let Some(limit) = output.limit.as_ref() {
 			f.push_str(" LIMIT ");
 			limit.fmt_sql(f, SqlFormat::SingleLine);
 		}
@@ -350,6 +447,103 @@ impl ToSql for MatchPlan {
 }
 
 impl MatchPlan {
+	/// Render one read clause as `[OPTIONAL ] MATCH <patterns> [WHERE <preds>]`
+	/// (no trailing space; the step loop joins with single spaces).
+	fn render_clause(&self, f: &mut String, clause: &MatchClausePlan) {
+		if clause.is_optional() {
+			f.push_str("OPTIONAL ");
+		}
+		f.push_str("MATCH ");
+		for (i, pattern) in clause.patterns.iter().enumerate() {
+			if i > 0 {
+				f.push_str(", ");
+			}
+			self.render_pattern(f, pattern);
+		}
+		if !clause.predicates.is_empty() {
+			f.push_str(" WHERE ");
+			for (i, predicate) in clause.predicates.iter().enumerate() {
+				if i > 0 {
+					f.push_str(" AND ");
+				}
+				predicate.expr.fmt_sql(f, SqlFormat::SingleLine);
+			}
+		}
+	}
+
+	/// Render one mutation stage in a deterministic GQL-ish form (EXPLAIN /
+	/// logs). Never panics: out-of-range bindings render as `?` via
+	/// [`MatchPlan::binding_name`].
+	fn render_mutation(&self, f: &mut String, stage: &MutationStage) {
+		match stage {
+			MutationStage::Update {
+				target,
+				data,
+			} => match data {
+				UpdateData::Set(assignments) => {
+					f.push_str("SET");
+					for (i, (place, value)) in assignments.iter().enumerate() {
+						if i > 0 {
+							f.push(',');
+						}
+						f.push(' ');
+						place.fmt_sql(f, SqlFormat::SingleLine);
+						f.push_str(" = ");
+						value.fmt_sql(f, SqlFormat::SingleLine);
+					}
+				}
+				UpdateData::Unset(fields) => {
+					f.push_str("REMOVE");
+					for (i, place) in fields.iter().enumerate() {
+						if i > 0 {
+							f.push(',');
+						}
+						f.push(' ');
+						place.fmt_sql(f, SqlFormat::SingleLine);
+					}
+				}
+				UpdateData::Content(expr) => {
+					f.push_str("SET ");
+					f.push_str(self.binding_name(*target));
+					f.push_str(" = ");
+					expr.fmt_sql(f, SqlFormat::SingleLine);
+				}
+			},
+			MutationStage::Delete {
+				target,
+				detach,
+			} => {
+				if matches!(detach, DetachMode::Detach) {
+					f.push_str("DETACH ");
+				}
+				f.push_str("DELETE ");
+				f.push_str(self.binding_name(*target));
+			}
+			MutationStage::Insert(stage) => {
+				f.push_str("INSERT");
+				for node in stage.nodes.iter() {
+					f.push_str(" (");
+					f.push_str(self.binding_name(node.binding));
+					f.push(':');
+					node.label.fmt_sql(f, SqlFormat::SingleLine);
+					f.push(' ');
+					node.props.fmt_sql(f, SqlFormat::SingleLine);
+					f.push(')');
+				}
+				for edge in stage.edges.iter() {
+					f.push(' ');
+					f.push_str(self.binding_name(edge.from));
+					f.push_str("-[");
+					f.push_str(self.binding_name(edge.binding));
+					f.push(':');
+					edge.label.fmt_sql(f, SqlFormat::SingleLine);
+					f.push_str("]->");
+					f.push_str(self.binding_name(edge.to));
+				}
+			}
+		}
+	}
+
 	/// Render one pattern as `p = (a:person)-[k:knows]->(b:person)`.
 	fn render_pattern(&self, f: &mut String, pattern: &PatternPlan) {
 		if let Some(path_var) = pattern.path_var {
@@ -477,6 +671,28 @@ mod tests {
 	use super::*;
 	use crate::expr::{Expr, Idiom, Literal, Part};
 
+	/// Wrap read clauses as the plan's [`MatchStage::Read`] steps (test builders
+	/// are all read-only).
+	fn stages_of(clauses: Vec<MatchClausePlan>) -> Vec<MatchStage> {
+		clauses.into_iter().map(MatchStage::Read).collect()
+	}
+
+	/// Mutable access to the read clause at step `i` (panics if it is not a read).
+	fn clause_mut(plan: &mut MatchPlan, i: usize) -> &mut MatchClausePlan {
+		match &mut plan.stages[i] {
+			MatchStage::Read(c) => c,
+			MatchStage::Mutate(_) => panic!("stage {i} is not a read clause"),
+		}
+	}
+
+	/// Shared access to the read clause at step `i` (panics if it is not a read).
+	fn clause(plan: &MatchPlan, i: usize) -> &MatchClausePlan {
+		match &plan.stages[i] {
+			MatchStage::Read(c) => c,
+			MatchStage::Mutate(_) => panic!("stage {i} is not a read clause"),
+		}
+	}
+
 	/// Build `a.x` as a binding-row scoped idiom expression.
 	fn field_path(binding: &str, field: &str) -> Expr {
 		Expr::Idiom(Idiom(vec![
@@ -535,12 +751,12 @@ mod tests {
 		};
 		MatchPlan {
 			bindings,
-			clauses: vec![MatchClausePlan {
+			stages: stages_of(vec![MatchClausePlan {
 				optional_group: None,
 				patterns: vec![pattern],
 				predicates: vec![predicate],
-			}],
-			output: MatchOutput {
+			}]),
+			output: Some(MatchOutput {
 				columns: vec![
 					MatchColumn {
 						name: "a_name".to_string(),
@@ -558,7 +774,7 @@ mod tests {
 				order: Vec::new(),
 				skip: None,
 				limit: None,
-			},
+			}),
 		}
 	}
 
@@ -583,20 +799,21 @@ mod tests {
 		});
 		plan.bindings[1].kind = BindingKind::EdgeGroup;
 		let path_id = (plan.bindings.len() - 1) as BindingId;
-		let clause = &mut plan.clauses[0];
+		let clause = clause_mut(&mut plan, 0);
 		clause.patterns[0].path_var = Some(path_id);
 		clause.patterns[0].steps[0].0.quantifier = Some(EdgeQuantifier {
 			min: 1,
 			max: Some(3),
 		});
 		clause.predicates.clear();
-		plan.output.distinct = true;
-		plan.output.order = vec![MatchOrder {
+		let output = plan.output.as_mut().unwrap();
+		output.distinct = true;
+		output.order = vec![MatchOrder {
 			expr: field_path("a", "age"),
 			ascending: false,
 		}];
-		plan.output.skip = Some(Expr::Literal(Literal::Integer(5)));
-		plan.output.limit = Some(Expr::Literal(Literal::Integer(10)));
+		output.skip = Some(Expr::Literal(Literal::Integer(5)));
+		output.limit = Some(Expr::Literal(Literal::Integer(10)));
 
 		assert_eq!(
 			plan.to_sql(),
@@ -610,16 +827,16 @@ mod tests {
 		let mut plan = sample_plan();
 		// Promote to a quantified, prefixed pattern: `ANY SHORTEST SIMPLE`.
 		plan.bindings[1].kind = BindingKind::EdgeGroup;
-		plan.clauses[0].patterns[0].steps[0].0.quantifier = Some(EdgeQuantifier {
+		clause_mut(&mut plan, 0).patterns[0].steps[0].0.quantifier = Some(EdgeQuantifier {
 			min: 1,
 			max: None,
 		});
-		plan.clauses[0].patterns[0].search = Some(PathPrefixPlan {
+		clause_mut(&mut plan, 0).patterns[0].search = Some(PathPrefixPlan {
 			search: PathSearch::AnyShortest,
 			mode: PathMode::Simple,
 		});
-		plan.clauses[0].predicates.clear();
-		plan.output.columns.truncate(1);
+		clause_mut(&mut plan, 0).predicates.clear();
+		plan.output.as_mut().unwrap().columns.truncate(1);
 		assert_eq!(
 			plan.to_sql(),
 			"MATCH ANY SHORTEST SIMPLE (a:person)-[k:knows]->{1,}(b:person) RETURN a.name AS a_name"
@@ -631,7 +848,7 @@ mod tests {
 		// `search: None` (no prefix written) renders nothing — keeping unprefixed
 		// plans byte-identical.
 		let plan = sample_plan();
-		assert!(plan.clauses[0].patterns[0].search.is_none());
+		assert!(clause(&plan, 0).patterns[0].search.is_none());
 		let rendered = plan.to_sql();
 		assert!(!rendered.contains("SHORTEST"), "{rendered}");
 		assert!(!rendered.contains("ANY"), "{rendered}");
@@ -642,18 +859,18 @@ mod tests {
 	fn to_sql_renders_shortest_group_count() {
 		let mut plan = sample_plan();
 		plan.bindings[1].kind = BindingKind::EdgeGroup;
-		plan.clauses[0].patterns[0].steps[0].0.quantifier = Some(EdgeQuantifier {
+		clause_mut(&mut plan, 0).patterns[0].steps[0].0.quantifier = Some(EdgeQuantifier {
 			min: 1,
 			max: None,
 		});
-		plan.clauses[0].patterns[0].search = Some(PathPrefixPlan {
+		clause_mut(&mut plan, 0).patterns[0].search = Some(PathPrefixPlan {
 			search: PathSearch::ShortestGroups {
 				count: 2,
 			},
 			mode: PathMode::Walk,
 		});
-		plan.clauses[0].predicates.clear();
-		plan.output.columns.truncate(1);
+		clause_mut(&mut plan, 0).predicates.clear();
+		plan.output.as_mut().unwrap().columns.truncate(1);
 		// `WALK` (the default mode) renders implicitly; `GROUPS` is plural for k > 1.
 		assert_eq!(
 			plan.to_sql(),
@@ -667,8 +884,8 @@ mod tests {
 		// A hidden edge binding renders without its name.
 		plan.bindings[1].user_named = false;
 		plan.bindings[1].name = "__e0".to_string();
-		plan.clauses[0].predicates.clear();
-		plan.output.columns.truncate(1);
+		clause_mut(&mut plan, 0).predicates.clear();
+		plan.output.as_mut().unwrap().columns.truncate(1);
 		assert_eq!(plan.to_sql(), "MATCH (a:person)-[:knows]->(b:person) RETURN a.name AS a_name");
 	}
 
@@ -690,7 +907,7 @@ mod tests {
 	fn to_sql_tolerates_out_of_range_binding() {
 		// A malformed plan must still render without panicking.
 		let mut plan = sample_plan();
-		plan.clauses[0].patterns[0].start.binding = 99;
+		clause_mut(&mut plan, 0).patterns[0].start.binding = 99;
 		let rendered = plan.to_sql();
 		assert!(rendered.contains("(:person)"));
 	}

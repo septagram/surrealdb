@@ -160,6 +160,72 @@ impl Registry {
 		self.hidden_edges += 1;
 		name
 	}
+
+	/// Looks up a binding id by name if declared — the `pub(super)` form of the
+	/// internal [`Registry::lookup`], used by the `INSERT` lowering to decide
+	/// whether a node references a variable already bound by the read body.
+	pub(super) fn try_lookup(&self, name: &str) -> Option<BindingId> {
+		self.lookup(name)
+	}
+
+	/// Resolves an `INSERT` endpoint that references a variable already bound by
+	/// the read body, returning its id. Errors if the variable is unknown or is
+	/// not a node binding (an edge/group/path variable cannot be an endpoint).
+	pub(super) fn resolve_node_ref(&self, ident: &Ident) -> Result<BindingId, SyntaxError> {
+		let id = self.resolve(ident)?;
+		match self.kind(id) {
+			BindingKind::Node => Ok(id),
+			other => Err(kind_mismatch(ident, other, BindingKind::Node)),
+		}
+	}
+
+	/// Declares a NEW node binding created by an `INSERT` (a fresh user variable
+	/// or an anonymous node). Errors if the user variable is already bound.
+	pub(super) fn declare_new_node(
+		&mut self,
+		var: Option<&Ident>,
+	) -> Result<BindingId, SyntaxError> {
+		match var {
+			None => Ok(self.declare_hidden_node()),
+			Some(ident) => {
+				naming::validate_var(ident)?;
+				if self.lookup(&ident.name).is_some() {
+					return Err(syntax_error!(
+						"Variable `{}` is already bound and cannot be created by INSERT",
+						ident.name,
+						@ident.span => "use a fresh variable for a new node, or drop the label and \
+						 properties to reference the bound one as an edge endpoint"
+					));
+				}
+				Ok(self.declare(ident.name.clone(), BindingKind::Node, true))
+			}
+		}
+	}
+
+	/// Declares a NEW edge binding created by an `INSERT`. An edge is always new
+	/// (never a reuse). Errors if the user variable is already bound.
+	pub(super) fn declare_new_edge(
+		&mut self,
+		var: Option<&Ident>,
+	) -> Result<BindingId, SyntaxError> {
+		match var {
+			None => {
+				let name = self.next_hidden_edge_name();
+				Ok(self.declare(name, BindingKind::Edge, false))
+			}
+			Some(ident) => {
+				naming::validate_var(ident)?;
+				if self.lookup(&ident.name).is_some() {
+					return Err(syntax_error!(
+						"Variable `{}` is already bound and cannot be created by INSERT",
+						ident.name,
+						@ident.span => "use a fresh variable for a new edge"
+					));
+				}
+				Ok(self.declare(ident.name.clone(), BindingKind::Edge, true))
+			}
+		}
+	}
 }
 
 /// The resolved bindings of every pattern element of a pattern, in pattern
@@ -197,16 +263,6 @@ pub(super) struct ClauseBindings<'ast> {
 	pub(super) patterns: Vec<PatternBindings>,
 }
 
-/// The result of [`analyze`]: the populated registry plus the flattened
-/// per-clause, per-pattern binding ids the rest of the lowering threads
-/// through, in textual order.
-pub(super) struct QueryBindings<'ast> {
-	pub(super) registry: Registry,
-	/// Every plain `MATCH` clause of the query, flattened from the `MatchItem`
-	/// tree in textual order, each tagged with its OPTIONAL metadata.
-	pub(super) clauses: Vec<ClauseBindings<'ast>>,
-}
-
 /// Bookkeeping threaded down the `MatchItem` walk: the next fresh `OPTIONAL`
 /// block id to hand out (a dense per-query counter, group order == textual
 /// order).
@@ -221,25 +277,66 @@ impl GroupCounter {
 	}
 }
 
-/// Walks every `MATCH` item of the query — plain clauses and the `OPTIONAL`
-/// operands that nest them — declaring each binding (sharing a node variable's
-/// id across reuses), validating the variable rules / anchorability / the
-/// optional-rebind rule, and returns the populated registry together with the
-/// flattened per-clause binding ids in textual order.
+/// Drives the binding-resolution pass one step at a time, so reads and mutations
+/// can interleave in textual order. The lowering calls [`Analyzer::read`] for a
+/// `MATCH`/`OPTIONAL` step and declares `INSERT` bindings via
+/// [`Analyzer::registry_mut`] for a mutation step, threading the same
+/// [`Registry`] (and `OPTIONAL` block counter) across the whole query. A read
+/// item's anchorability is therefore checked against everything declared before
+/// it — including variables an earlier `INSERT` created.
 ///
-/// Items, a clause's patterns, and nested operands are all walked in textual
-/// order, so "already bound by an earlier pattern / clause" — the anchorability
-/// alternative — is exactly the set of variables declared before the current
-/// pattern began.
-pub(super) fn analyze(items: &[MatchItem]) -> Result<QueryBindings<'_>, SyntaxError> {
-	let mut registry = Registry::new();
-	let mut clauses = Vec::new();
-	let mut groups = GroupCounter(0);
-	analyze_items(&mut registry, items, None, &mut groups, &mut clauses)?;
-	Ok(QueryBindings {
-		registry,
-		clauses,
-	})
+/// Items, a clause's patterns, and nested operands are walked in textual order,
+/// so "already bound by an earlier pattern / clause / INSERT" — the
+/// anchorability alternative — is exactly the set of variables declared before
+/// the current pattern began.
+pub(super) struct Analyzer {
+	registry: Registry,
+	groups: GroupCounter,
+}
+
+impl Analyzer {
+	pub(super) fn new() -> Self {
+		Analyzer {
+			registry: Registry::new(),
+			groups: GroupCounter(0),
+		}
+	}
+
+	/// Declares the bindings of one read step (a `MATCH` clause or an `OPTIONAL`
+	/// operand), returning one [`ClauseBindings`] per flattened clause (a plain
+	/// `MATCH` yields one; an `OPTIONAL` block yields its inner clauses, each
+	/// tagged with the block id). The block counter persists across calls so
+	/// `OPTIONAL` block ids stay unique across the query.
+	pub(super) fn read<'ast>(
+		&mut self,
+		item: &'ast MatchItem,
+	) -> Result<Vec<ClauseBindings<'ast>>, SyntaxError> {
+		let mut out = Vec::new();
+		analyze_items(
+			&mut self.registry,
+			std::slice::from_ref(item),
+			None,
+			&mut self.groups,
+			&mut out,
+		)?;
+		Ok(out)
+	}
+
+	/// The registry built so far (read by clause and output lowering).
+	pub(super) fn registry(&self) -> &Registry {
+		&self.registry
+	}
+
+	/// The registry, mutably — an `INSERT` step declares its new bindings here.
+	pub(super) fn registry_mut(&mut self) -> &mut Registry {
+		&mut self.registry
+	}
+
+	/// Consumes the analyzer, yielding the completed registry (for the output
+	/// spec and the final [`BindingDef`] list).
+	pub(super) fn into_registry(self) -> Registry {
+		self.registry
+	}
 }
 
 /// Walks a sequence of `MatchItem`s in textual order, flattening plain clauses

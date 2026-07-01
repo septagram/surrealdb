@@ -304,24 +304,49 @@ implement_visitor! {
 		},
 		#[cfg(feature = "opengql")]
 		Expr::Match(plan) => {
-			// Walk every reachable Expr: clause predicates, output columns,
-			// ORDER BY exprs, and SKIP/LIMIT.
-			for clause in plan.clauses.iter(){
-				for predicate in clause.predicates.iter(){
-					this.visit_expr(&predicate.expr)?;
+			use crate::expr::match_plan::{MatchStage, MutationStage, UpdateData};
+			// Walk every reachable Expr across the steps (clause predicates and
+			// mutation-stage values), then the output columns/ORDER BY/SKIP/LIMIT.
+			for stage in plan.stages.iter(){
+				match stage {
+					MatchStage::Read(clause) => {
+						for predicate in clause.predicates.iter(){
+							this.visit_expr(&predicate.expr)?;
+						}
+					}
+					MatchStage::Mutate(MutationStage::Update { data, .. }) => match data {
+						UpdateData::Set(assignments) => {
+							for (_, value) in assignments.iter(){
+								this.visit_expr(value)?;
+							}
+						}
+						UpdateData::Unset(_) => {}
+						UpdateData::Content(expr) => this.visit_expr(expr)?,
+					},
+					MatchStage::Mutate(MutationStage::Delete { .. }) => {}
+					MatchStage::Mutate(MutationStage::Insert(insert)) => {
+						for node in insert.nodes.iter(){
+							this.visit_expr(&node.props)?;
+						}
+						for edge in insert.edges.iter(){
+							this.visit_expr(&edge.props)?;
+						}
+					}
 				}
 			}
-			for column in plan.output.columns.iter(){
-				this.visit_expr(&column.expr)?;
-			}
-			for order in plan.output.order.iter(){
-				this.visit_expr(&order.expr)?;
-			}
-			if let Some(skip) = plan.output.skip.as_ref(){
-				this.visit_expr(skip)?;
-			}
-			if let Some(limit) = plan.output.limit.as_ref(){
-				this.visit_expr(limit)?;
+			if let Some(output) = plan.output.as_ref(){
+				for column in output.columns.iter(){
+					this.visit_expr(&column.expr)?;
+				}
+				for order in output.order.iter(){
+					this.visit_expr(&order.expr)?;
+				}
+				if let Some(skip) = output.skip.as_ref(){
+					this.visit_expr(skip)?;
+				}
+				if let Some(limit) = output.limit.as_ref(){
+					this.visit_expr(limit)?;
+				}
 			}
 		},
 	}
@@ -1850,24 +1875,49 @@ implement_visitor_mut! {
 		},
 		#[cfg(feature = "opengql")]
 		Expr::Match(plan) => {
-			// Walk every reachable Expr: clause predicates, output columns,
-			// ORDER BY exprs, and SKIP/LIMIT.
-			for clause in plan.clauses.iter_mut(){
-				for predicate in clause.predicates.iter_mut(){
-					this.visit_mut_expr(&mut predicate.expr)?;
+			use crate::expr::match_plan::{MatchStage, MutationStage, UpdateData};
+			// Walk every reachable Expr across the steps (clause predicates and
+			// mutation-stage values), then the output columns/ORDER BY/SKIP/LIMIT.
+			for stage in plan.stages.iter_mut(){
+				match stage {
+					MatchStage::Read(clause) => {
+						for predicate in clause.predicates.iter_mut(){
+							this.visit_mut_expr(&mut predicate.expr)?;
+						}
+					}
+					MatchStage::Mutate(MutationStage::Update { data, .. }) => match data {
+						UpdateData::Set(assignments) => {
+							for (_, value) in assignments.iter_mut(){
+								this.visit_mut_expr(value)?;
+							}
+						}
+						UpdateData::Unset(_) => {}
+						UpdateData::Content(expr) => this.visit_mut_expr(expr)?,
+					},
+					MatchStage::Mutate(MutationStage::Delete { .. }) => {}
+					MatchStage::Mutate(MutationStage::Insert(insert)) => {
+						for node in insert.nodes.iter_mut(){
+							this.visit_mut_expr(&mut node.props)?;
+						}
+						for edge in insert.edges.iter_mut(){
+							this.visit_mut_expr(&mut edge.props)?;
+						}
+					}
 				}
 			}
-			for column in plan.output.columns.iter_mut(){
-				this.visit_mut_expr(&mut column.expr)?;
-			}
-			for order in plan.output.order.iter_mut(){
-				this.visit_mut_expr(&mut order.expr)?;
-			}
-			if let Some(skip) = plan.output.skip.as_mut(){
-				this.visit_mut_expr(skip)?;
-			}
-			if let Some(limit) = plan.output.limit.as_mut(){
-				this.visit_mut_expr(limit)?;
+			if let Some(output) = plan.output.as_mut(){
+				for column in output.columns.iter_mut(){
+					this.visit_mut_expr(&mut column.expr)?;
+				}
+				for order in output.order.iter_mut(){
+					this.visit_mut_expr(&mut order.expr)?;
+				}
+				if let Some(skip) = output.skip.as_mut(){
+					this.visit_mut_expr(skip)?;
+				}
+				if let Some(limit) = output.limit.as_mut(){
+					this.visit_mut_expr(limit)?;
+				}
 			}
 		},
 	}

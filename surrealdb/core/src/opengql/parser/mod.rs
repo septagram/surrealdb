@@ -28,6 +28,7 @@ use crate::syn::error::{SyntaxError, bail};
 
 mod expr;
 pub(crate) mod mac;
+mod mutation;
 mod pattern;
 mod stmt;
 mod token_buffer;
@@ -176,13 +177,13 @@ impl<'a> Parser<'a> {
 
 	/// Parse a full query: the primary entry point of the parser.
 	pub async fn parse_query(&mut self, stk: &mut Stk) -> ParseResult<GqlQuery> {
-		let stmt = self.parse_statement(stk).await?;
+		let program = self.parse_statement(stk).await?;
 		let token = self.peek();
 		if !token.is_eof() {
 			unexpected!(self, token, "the query to end");
 		}
 		Ok(GqlQuery {
-			stmt,
+			program,
 		})
 	}
 

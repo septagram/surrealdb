@@ -12,8 +12,8 @@ use surrealdb_types::{SqlFormat, ToSql};
 
 use crate::expr::Expr;
 use crate::expr::match_plan::{
-	BindingDef, BindingKind, EdgeQuantifier, ExpandDirection, MatchClausePlan, MatchPlan, NodeStep,
-	PatternPlan,
+	BindingDef, BindingId, BindingKind, DetachMode, EdgeQuantifier, ExpandDirection,
+	MatchClausePlan, MatchPlan, MatchStage, MutationStage, NodeStep, PatternPlan, UpdateData,
 };
 use crate::expr::plan::TopLevelExpr;
 use crate::opengql::{GqlParserSettings, lower, parse_str, parse_to_plan_with_settings};
@@ -68,12 +68,81 @@ fn render_plan(plan: &MatchPlan) -> String {
 	}
 	out.push('\n');
 
-	for clause in &plan.clauses {
-		render_clause(plan, clause, &mut out);
+	for stage in &plan.stages {
+		match stage {
+			MatchStage::Read(clause) => render_clause(plan, clause, &mut out),
+			MatchStage::Mutate(mutation) => render_mutation(plan, mutation, &mut out),
+		}
 	}
 
 	render_output(plan, &mut out);
 	out
+}
+
+/// Renders one mutation stage as a compact, single-line step so interleaved
+/// read/write programs stay diffable in the lowering snapshots.
+fn render_mutation(plan: &MatchPlan, mutation: &MutationStage, out: &mut String) {
+	let name = |id: BindingId| name_of(plan, id).to_owned();
+	match mutation {
+		MutationStage::Update {
+			target,
+			data,
+		} => match data {
+			UpdateData::Set(items) => {
+				let assigns: Vec<String> = items
+					.iter()
+					.map(|(idiom, expr)| format!("{} = {}", idiom.to_sql(), render_expr(expr)))
+					.collect();
+				out.push_str(&format!("SET [{}] {}\n", name(*target), assigns.join(", ")));
+			}
+			UpdateData::Unset(paths) => {
+				let paths: Vec<String> = paths.iter().map(|idiom| idiom.to_sql()).collect();
+				out.push_str(&format!("REMOVE [{}] {}\n", name(*target), paths.join(", ")));
+			}
+			UpdateData::Content(expr) => {
+				out.push_str(&format!("SET [{}] = {}\n", name(*target), render_expr(expr)));
+			}
+		},
+		MutationStage::Delete {
+			target,
+			detach,
+		} => {
+			let mode = match detach {
+				DetachMode::Detach => "DETACH ",
+				DetachMode::NoDetach => "",
+			};
+			out.push_str(&format!("{mode}DELETE [{}]\n", name(*target)));
+		}
+		MutationStage::Insert(stage) => {
+			let nodes: Vec<String> = stage
+				.nodes
+				.iter()
+				.map(|node| format!("({}:{})", name(node.binding), node.label.as_str()))
+				.collect();
+			let edges: Vec<String> = stage
+				.edges
+				.iter()
+				.map(|edge| {
+					format!(
+						"({})-[{}:{}]->({})",
+						name(edge.from),
+						name(edge.binding),
+						edge.label.as_str(),
+						name(edge.to),
+					)
+				})
+				.collect();
+			out.push_str("INSERT ");
+			out.push_str(&nodes.join(" "));
+			if !edges.is_empty() {
+				if !nodes.is_empty() {
+					out.push(' ');
+				}
+				out.push_str(&edges.join(" "));
+			}
+			out.push('\n');
+		}
+	}
 }
 
 /// Renders one binding as `name:Kind` (a hidden binding is suffixed `*`).
@@ -175,11 +244,14 @@ fn render_quantifier(quantifier: &EdgeQuantifier, out: &mut String) {
 }
 
 fn render_output(plan: &MatchPlan, out: &mut String) {
+	// The lowering test harness only lowers read queries, which always carry an
+	// output spec.
+	let output = plan.output.as_ref().expect("a read query carries a RETURN output");
 	out.push_str("RETURN");
-	if plan.output.distinct {
+	if output.distinct {
 		out.push_str(" DISTINCT");
 	}
-	for (i, column) in plan.output.columns.iter().enumerate() {
+	for (i, column) in output.columns.iter().enumerate() {
 		if i > 0 {
 			out.push(',');
 		}
@@ -188,7 +260,7 @@ fn render_output(plan: &MatchPlan, out: &mut String) {
 		out.push_str(" AS ");
 		out.push_str(&column.name);
 	}
-	if let Some(keys) = &plan.output.group_by {
+	if let Some(keys) = &output.group_by {
 		if keys.is_empty() {
 			out.push_str("\nGROUP ALL");
 		} else {
@@ -202,9 +274,9 @@ fn render_output(plan: &MatchPlan, out: &mut String) {
 			}
 		}
 	}
-	if !plan.output.order.is_empty() {
+	if !output.order.is_empty() {
 		out.push_str("\nORDER BY");
-		for (i, order) in plan.output.order.iter().enumerate() {
+		for (i, order) in output.order.iter().enumerate() {
 			if i > 0 {
 				out.push(',');
 			}
@@ -217,11 +289,11 @@ fn render_output(plan: &MatchPlan, out: &mut String) {
 			});
 		}
 	}
-	if let Some(skip) = &plan.output.skip {
+	if let Some(skip) = &output.skip {
 		out.push_str("\nSKIP ");
 		out.push_str(&render_expr(skip));
 	}
-	if let Some(limit) = &plan.output.limit {
+	if let Some(limit) = &output.limit {
 		out.push_str("\nLIMIT ");
 		out.push_str(&render_expr(limit));
 	}

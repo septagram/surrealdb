@@ -15,6 +15,11 @@ mod join;
 mod knn_topk;
 mod let_plan;
 mod limit;
+// The GQL mutation operators are constructed only by the opengql-gated planner
+// and depend on the (also opengql-gated) `expr::match_plan` IR, so the module is
+// compiled only with the feature on.
+#[cfg(feature = "opengql")]
+mod mutate;
 mod project;
 mod project_value;
 pub(crate) mod recursion;
@@ -64,6 +69,10 @@ pub use join::{HashJoin, JoinType};
 pub use knn_topk::KnnTopK;
 pub use let_plan::LetPlan;
 pub use limit::Limit;
+#[cfg(feature = "opengql")]
+pub use mutate::{DeleteBinding, DrainSink, InsertGraph, SingleRowScan, UpdateBinding};
+#[cfg(feature = "opengql")]
+pub(crate) use mutate::{InsertEdgeOp, InsertNodeOp};
 pub use project::{FieldSelection, Project, Projection, SelectProject};
 pub use project_value::ProjectValue;
 pub use recursion::RecursionOp;
@@ -116,6 +125,31 @@ pub(crate) fn check_cancelled(ctx: &ExecutionContext) -> FlowResult<()> {
 		)));
 	}
 	Ok(())
+}
+
+/// The record id of a binding slot, the way a GQL binding row encodes it: the
+/// slot holds either the full node/edge record object (so its `id` field is the
+/// record id) or, defensively, a bare [`crate::val::RecordId`]. Anything else (a
+/// null/none/missing binding, or a non-record value) yields `None`. Shared by the
+/// graph traversal operators (`PathExpand`'s `source_record_id`) and the mutation
+/// operators (`mutate.rs`), so the single binding-row id convention lives in one
+/// place.
+#[cfg_attr(not(feature = "opengql"), allow(dead_code))]
+pub(crate) fn binding_record_id(
+	row: &crate::val::Value,
+	name: &str,
+) -> Option<crate::val::RecordId> {
+	let crate::val::Value::Object(obj) = row else {
+		return None;
+	};
+	match obj.get(name) {
+		Some(crate::val::Value::Object(node)) => match node.get("id") {
+			Some(crate::val::Value::RecordId(rid)) => Some(rid.clone()),
+			_ => None,
+		},
+		Some(crate::val::Value::RecordId(rid)) => Some(rid.clone()),
+		_ => None,
+	}
 }
 
 /// The `SURREAL_GQL_MAX_OUTPUT_ROWS` guard error, naming the knob. Shared by the

@@ -667,13 +667,65 @@ edge patterns are not supported yet"*), label expressions beyond a single name
 aggregates (*"Aggregate functions are not supported yet"*) and every other
 function call (*"The function `{}` is not supported yet"*), `NULLS FIRST|LAST`
 (*"`NULLS FIRST`/`NULLS LAST` ordering is not supported yet"*), `XOR` (*"`XOR`
-is not supported yet"*), `KEEP`, `YIELD`, `EXISTS`/`CASE`/`CAST`, mutations, and
+is not supported yet"*), `KEEP`, `YIELD`, `EXISTS`/`CASE`/`CAST`, and
 all the `UNION`/`EXCEPT`/`INTERSECT`/`OTHERWISE` composition and `USE`-graph
 forms. (Path-search and path-mode prefixes are now **supported** — see "Path
-search & path modes" above.) v2 adds five *new* rejections that did not exist in
+search & path modes" above. The four ISO data-modifying statements — `INSERT`,
+`SET`, `REMOVE`, `DELETE` — are now **supported** too; see "Mutations" below.) v2 adds five *new* rejections that did not exist in
 v1 because the constructs they guard were wholly rejected before: repeated edge
 variable, kind-mismatched reuse, optional-rebind, cross-variable
 quantified-edge predicate, and property-access-on-group/path-var (all quoted
 above or in `LOWERING.md`). Path search adds its own: a prefix on a
 non-single-variable-length pattern, a self-loop start==end selective search, a
 bare `SHORTEST` (no count or `GROUP`), and a zero count.
+
+## Mutations
+
+A query is a *linear program*: an ordered sequence of `MATCH`/`OPTIONAL` read
+clauses and data-modifying statements, in any interleaving, optionally ending in
+a `RETURN`. The binding table threads through every step in textual order.
+(`RETURN` is optional only when the query mutates; a read-only query must still
+end with one.) A `MATCH` or `OPTIONAL` clause may follow a mutation: it re-scans
+the **live** (post-write) state in the same transaction, so a clause after a
+`SET`/`DELETE` sees the updated/removed records, and a clause after an `INSERT`
+sees the created ones (and may anchor on the variables the `INSERT` bound). A
+`MATCH` after a mutation is still a mandatory clause, so — like any mandatory
+clause — it must carry a labelled element to root on (the realisability rule); it
+joins into the accumulated bindings via the same hash-join machinery a sequential
+`MATCH` uses.
+
+The four ISO data-modifying statements:
+
+- **`SET`** — `SET a.p = v` sets a property; `SET a = {…}` replaces all user
+  properties (the record `id`, and an edge's `in`/`out`, are preserved). Setting
+  those reserved keys is rejected on **both** surfaces — per-property `SET a.id`/
+  `SET a.out` and the `SET a = {…}` object form — since the native write path
+  would otherwise silently re-stamp them. `SET a:Label` is rejected: a SurrealDB
+  record belongs to exactly one table, so labels are immutable.
+- **`REMOVE`** — `REMOVE a.p` unsets a property. `REMOVE a:Label` is rejected
+  (same one-table-per-record rule).
+- **`DELETE`** — `[DETACH|NODETACH] DELETE a` deletes the matched node/edge.
+  `NODETACH` (the ISO default) errors if the node still has connected edges;
+  `DETACH` cascades them.
+- **`INSERT`** — `INSERT (a:Label {…})-[:Edge {…}]->(b:Label {…})` creates new
+  nodes (each requires a label = table) and relates new edges. A node with no
+  label and no properties references a variable already bound by a preceding
+  `MATCH` (an existing edge endpoint). A leading `INSERT` (no `MATCH`) runs once;
+  with a preceding `MATCH` it runs once per binding row.
+
+Mutations execute through SurrealDB's native document pipeline (the same one
+`CREATE`/`UPDATE`/`DELETE`/`RELATE` use), so record/field permissions, field
+validation, events, indexes, references, and live-query notifications all apply.
+
+A mutation-only query (no `RETURN`) returns an empty result. With a `RETURN`, the
+projected bindings reflect the **post-mutation** state:
+
+- `SET`/`INSERT` rebind the mutated/created record (the AFTER image). A fan-out
+  that binds the same record more than once applies the write per row, in row
+  order (last-write-wins for a row-dependent value), and every row carries a
+  consistent image of its own write.
+- a deleted binding becomes `null`; a `DETACH DELETE` additionally nulls any
+  bound edge it cascaded.
+- `SET a = {…}` replaces all of `a`'s user properties (a `CONTENT` replace, so
+  properties absent from the map are dropped), preserving the record `id` and an
+  edge's `in`/`out`.

@@ -17,6 +17,7 @@
 
 mod binding;
 mod expr;
+mod mutation;
 mod naming;
 mod pattern;
 
@@ -28,14 +29,15 @@ use surrealdb_types::ToSql;
 
 use self::binding::Registry;
 use self::expr::Scope;
-use crate::expr::match_plan::{MatchColumn, MatchOrder, MatchOutput, MatchPlan};
+use crate::expr::match_plan::{MatchColumn, MatchOrder, MatchOutput, MatchPlan, MatchStage};
 use crate::expr::plan::{LogicalPlan, TopLevelExpr};
 use crate::expr::{Expr, Idiom, Literal, Param};
 use crate::opengql::ast::{
-	GqlExpr, GqlGroupItem, GqlLiteral, GqlQuery, GqlStatement, MatchItem, MatchQuery, OrderItem,
+	GqlExpr, GqlGroupItem, GqlLiteral, GqlQuery, GqlStep, LinearQuery, MatchItem, OrderItem,
 	ReturnClause, ReturnItems, SetQuantifier,
 };
 use crate::syn::error::{SyntaxError, bail, syntax_error};
+use crate::syn::token::Span;
 
 /// Lowers a parsed GQL query into a [`LogicalPlan`] carrying a single
 /// [`Expr::Match`].
@@ -43,68 +45,100 @@ use crate::syn::error::{SyntaxError, bail, syntax_error};
 /// Runs on a [`reblessive`] stack: the GQL AST contains arbitrarily deep
 /// expression chains which the machine stack must not recurse over.
 pub(super) fn lower(query: GqlQuery) -> Result<LogicalPlan, SyntaxError> {
-	let GqlQuery {
-		stmt: GqlStatement::Match(query),
-	} = query;
+	let LinearQuery {
+		steps,
+		ret,
+		span,
+	} = query.program;
 	let mut stack = Stack::new();
-	let plan = stack.enter(|stk| lower_match_query(stk, &query)).finish()?;
+	let plan = stack.enter(|stk| lower_program(stk, &steps, ret.as_ref(), span)).finish()?;
 	Ok(LogicalPlan {
 		expressions: vec![TopLevelExpr::Expr(Expr::Match(Box::new(plan)))],
 	})
 }
 
-/// Lowers the `MatchQuery` into a [`MatchPlan`]: one [`MatchClausePlan`] per
-/// MATCH statement (in textual order, `OPTIONAL` operands flattened and tagged),
-/// each carrying every comma-separated pattern, joined by the planner on the
-/// shared node bindings the registry declares. A reused node variable is a
-/// single binding (the equi-join key); the lowering declares the shared id but
-/// never decides the join. `OPTIONAL` clauses are tagged with `optional` and a
-/// per-block `optional_group` for the planner's left-join (R3). The empty-query
-/// case stays rejected.
-async fn lower_match_query(stk: &mut Stk, query: &MatchQuery) -> Result<MatchPlan, SyntaxError> {
-	reject_empty_query(query)?;
-	reject_leading_optional(query)?;
+/// Lowers a whole linear query — `MATCH`/`OPTIONAL` reads and
+/// `INSERT`/`SET`/`REMOVE`/`DELETE` mutations interleaved in textual order, plus
+/// an optional `RETURN` — into a [`MatchPlan`].
+///
+/// A single ordered pass threads the binding registry through the steps: each
+/// read clause declares and lowers its bindings against the registry built so
+/// far (so a later `MATCH` can anchor on a variable an earlier `INSERT`
+/// created), and each mutation lowers and extends the registry. The output spec
+/// lowers last, against the complete registry. For a read-only query (no
+/// mutation) the per-step walk produces exactly the previous read-body lowering.
+async fn lower_program(
+	stk: &mut Stk,
+	steps: &[GqlStep],
+	ret: Option<&ReturnClause>,
+	span: Span,
+) -> Result<MatchPlan, SyntaxError> {
+	reject_leading_optional(steps)?;
 
-	// The binding registry spans the whole query, walking the `MatchItem` tree in
-	// textual order: a node variable reused across patterns / clauses keeps the id
-	// of its first declaration (one shared binding), and each binding records the
-	// `OPTIONAL` depth it was first declared at. The flattened clause list carries
-	// each clause's OPTIONAL metadata.
-	let bindings = binding::analyze(&query.items)?;
-
-	let mut clauses = Vec::with_capacity(bindings.clauses.len());
-	for clause_bindings in bindings.clauses.iter() {
-		clauses.push(pattern::lower_clause(stk, clause_bindings, &bindings.registry).await?);
+	let mut analyzer = binding::Analyzer::new();
+	let mut stages: Vec<MatchStage> = Vec::new();
+	for step in steps {
+		match step {
+			GqlStep::Read(item) => {
+				// `read` declares the item's bindings (anchorability checked
+				// against the registry built so far, which includes earlier
+				// INSERT-created variables) and returns one [`ClauseBindings`] per
+				// flattened clause; each lowers against the registry so far.
+				for clause_bindings in analyzer.read(item)? {
+					let clause =
+						pattern::lower_clause(stk, &clause_bindings, analyzer.registry()).await?;
+					stages.push(MatchStage::Read(clause));
+				}
+			}
+			GqlStep::Mutate(stmt) => {
+				for mutation in
+					mutation::lower_statement(stk, analyzer.registry_mut(), stmt).await?
+				{
+					stages.push(MatchStage::Mutate(mutation));
+				}
+			}
+		}
 	}
 
-	let output = lower_output(stk, &query.ret, &bindings.registry).await?;
+	let registry = analyzer.into_registry();
+
+	// A query needs at least one read clause or mutation (a bare `RETURN` has no
+	// `MATCH`).
+	if stages.is_empty() {
+		bail!(
+			"A query without a MATCH clause is not supported yet",
+			@span => "start the query with a MATCH clause"
+		);
+	}
+
+	let output = match ret {
+		Some(ret) => Some(lower_output(stk, ret, &registry).await?),
+		None => {
+			// A read-only query must project a RETURN; a mutation-only query
+			// need not (it runs for its side effects and returns nothing).
+			if !stages.iter().any(|s| matches!(s, MatchStage::Mutate(_))) {
+				bail!(
+					"A GQL query must end with a RETURN clause",
+					@span => "add a `RETURN …` clause"
+				);
+			}
+			None
+		}
+	};
 
 	Ok(MatchPlan {
-		bindings: bindings.registry.into_defs(),
-		clauses,
+		bindings: registry.into_defs(),
+		stages,
 		output,
 	})
 }
 
-/// Rejects an empty query (no MATCH clause). Multiple MATCH clauses and
-/// `OPTIONAL` operands all lower.
-fn reject_empty_query(query: &MatchQuery) -> Result<(), SyntaxError> {
-	if query.items.is_empty() {
-		bail!(
-			"A query without a MATCH clause is not supported yet",
-			@query.ret.span => "start the query with a MATCH clause"
-		);
-	}
-	Ok(())
-}
-
-/// Rejects a query that LEADS with `OPTIONAL` (R3): an `OPTIONAL` is a left-outer
-/// join against the binding table accumulated by the clauses before it, so the
-/// first MATCH statement of a query must be mandatory — there is nothing to
-/// left-outer against otherwise. (The planner relies on this: the first fold unit
-/// is always a mandatory clause.)
-fn reject_leading_optional(query: &MatchQuery) -> Result<(), SyntaxError> {
-	if let Some(MatchItem::Optional(block)) = query.items.first() {
+/// Rejects a query that LEADS with `OPTIONAL`: an `OPTIONAL` is a left-outer
+/// join and needs a preceding step (a `MATCH`, or a mutation that seeds the
+/// binding table) to join against — there is nothing to left-outer against
+/// otherwise, and the planner relies on the first read unit being mandatory.
+fn reject_leading_optional(steps: &[GqlStep]) -> Result<(), SyntaxError> {
+	if let Some(GqlStep::Read(MatchItem::Optional(block))) = steps.first() {
 		bail!(
 			"A query cannot start with OPTIONAL MATCH: OPTIONAL is a left-outer join and needs a \
 			 preceding MATCH to join against",

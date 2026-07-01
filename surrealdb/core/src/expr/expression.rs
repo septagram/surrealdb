@@ -139,9 +139,10 @@ impl Expr {
 				..
 			} => statement.read_only(),
 			Expr::Closure(_) => true,
-			// GQL MATCH only ever reads (mutations stay lowering-rejected).
+			// A GQL query is read-only unless it carries mutation stages; a
+			// mutation-bearing plan must run under a write transaction.
 			#[cfg(feature = "opengql")]
-			Expr::Match(_) => true,
+			Expr::Match(plan) => !plan.has_mutations(),
 			Expr::Create(_)
 			| Expr::Update(_)
 			| Expr::Delete(_)

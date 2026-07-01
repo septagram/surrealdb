@@ -234,12 +234,15 @@ fn keywords_are_case_insensitive() {
 }
 
 #[test]
-fn missing_return_clause() {
-	let error = parse_err("MATCH (a)");
-	assert!(
-		error.contains("Unexpected end of file, expected a MATCH or RETURN statement"),
-		"{error}"
-	);
+fn match_without_return_parses() {
+	// `RETURN` is now optional at the parser level (a linear data-modifying
+	// statement may end without a result statement); a read-only query that
+	// omits it is rejected later, in lowering, not here.
+	let program =
+		crate::opengql::parse_str("MATCH (a)").expect("MATCH without RETURN parses").program;
+	assert_eq!(program.steps.len(), 1);
+	assert!(matches!(program.steps[0], crate::opengql::ast::GqlStep::Read(_)));
+	assert!(program.ret.is_none());
 }
 
 #[test]
@@ -299,20 +302,30 @@ fn unsupported_statements_rejected(#[case] source: &str, #[case] expected: &str)
 }
 
 #[rstest]
-#[case::insert("INSERT (a:person) RETURN 1")]
-#[case::create("CREATE GRAPH g RETURN 1")]
+#[case::insert("INSERT (a:person {name: 'x'})")]
+#[case::insert_return("INSERT (a:person) RETURN 1")]
 #[case::set("MATCH (a) SET a.x = 1 RETURN 1")]
+#[case::set_all("MATCH (a) SET a = {x: 1}")]
 #[case::remove("MATCH (a) REMOVE a.x RETURN 1")]
 #[case::delete("MATCH (a) DELETE a")]
 #[case::detach("MATCH (a) DETACH DELETE a")]
 #[case::nodetach("MATCH (a) NODETACH DELETE a")]
-#[case::drop("DROP GRAPH g")]
-fn write_statements_rejected(#[case] source: &str) {
+fn mutation_statements_parse(#[case] source: &str) {
+	// The four ISO data-modifying statements now parse; their semantics (and
+	// any rejections, e.g. label mutations) are enforced in lowering.
+	crate::opengql::parse_str(source)
+		.unwrap_or_else(|e| panic!("expected {source:?} to parse: {:?}", e.render_on(source)));
+}
+
+#[rstest]
+#[case::create("CREATE GRAPH g RETURN 1", "`CREATE` statements")]
+#[case::drop("DROP GRAPH g", "`DROP` statements")]
+fn catalog_statements_rejected(#[case] source: &str, #[case] expected: &str) {
+	// `CREATE GRAPH` / `DROP GRAPH` are ISO catalog statements, outside the
+	// supported data-modifying subset.
 	let error = parse_err(source);
-	assert!(
-		error.contains("GQL write statements are not supported in this version (read-only)"),
-		"{error}"
-	);
+	assert!(error.contains(expected), "{error}");
+	assert!(error.contains("not supported yet"), "{error}");
 }
 
 #[rstest]

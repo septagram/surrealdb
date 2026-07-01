@@ -4426,6 +4426,579 @@ mod test {
 		Ok(())
 	}
 
+	/// A datastore with the `opengql` capability and an initialised `test/test`
+	/// namespace/database, for the GQL mutation tests.
+	#[cfg(feature = "opengql")]
+	async fn opengql_test_ds() -> Result<(Datastore, Session)> {
+		use crate::dbs::capabilities::Targets;
+		let ds = Datastore::builder()
+			.with_capabilities(Capabilities::all().with_experimental(Targets::All))
+			.build_with_path("memory")
+			.await?;
+		let ses = Session::owner().with_ns("test").with_db("test");
+		let txn = ds.transaction(Write, Pessimistic).await?;
+		txn.ensure_ns_db(None, "test", "test").await?;
+		txn.commit().await?;
+		Ok((ds, ses))
+	}
+
+	/// Run one GQL query, asserting a single statement result, and return it.
+	#[cfg(feature = "opengql")]
+	async fn run_gql(ds: &Datastore, ses: &Session, query: &str) -> Result<PublicValue> {
+		let mut res = ds.execute_opengql(query, ses, None).await?;
+		assert_eq!(res.len(), 1, "expected one result for {query:?}");
+		Ok(res.remove(0).result?)
+	}
+
+	/// Run one GQL query expecting failure (parse/lowering rejection or a
+	/// per-statement execution error), returning the rendered error.
+	#[cfg(feature = "opengql")]
+	async fn run_gql_err(ds: &Datastore, ses: &Session, query: &str) -> String {
+		match ds.execute_opengql(query, ses, None).await {
+			Ok(mut res) => match res.remove(0).result {
+				Ok(value) => panic!("expected {query:?} to fail, got {value:?}"),
+				Err(e) => e.to_string(),
+			},
+			Err(e) => e.to_string(),
+		}
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_set_updates_and_returns_after_image() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30;").await?;
+		// SET returns the post-mutation value.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person) WHERE n.name = 'A' SET n.age = 31 RETURN n.age AS age",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { age: 31 }]));
+		// And it persisted.
+		let val = run_gql(&ds, &ses, "MATCH (n:person) RETURN n.age AS age").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { age: 31 }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_remove_unsets_field_and_returns_empty() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30;").await?;
+		// A mutation-only query returns an empty array.
+		let val = run_gql(&ds, &ses, "MATCH (n:person) REMOVE n.age").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		// The field is gone: a filter on the old value no longer matches.
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) WHERE n.age = 30 RETURN n.name AS name").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		// The record itself survives.
+		let val = run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { name: "A" }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_delete_nodetach_errors_with_edges_then_detach_succeeds() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(
+			&ds,
+			&ses,
+			"CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B'; \
+			 RELATE person:1->knows->person:2;",
+		)
+		.await?;
+		// NODETACH (the default) on a node that still has edges errors.
+		let err = run_gql_err(&ds, &ses, "MATCH (n:person) WHERE n.name = 'A' DELETE n").await;
+		assert!(err.contains("connected edges"), "{err}");
+		// The failed delete rolled back: A is still present.
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name ORDER BY name").await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { name: "A" },
+				object! { name: "B" }
+			])
+		);
+		// DETACH DELETE removes A and its edge.
+		let val = run_gql(&ds, &ses, "MATCH (n:person) WHERE n.name = 'A' DETACH DELETE n").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name ORDER BY name").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { name: "B" }]));
+		// The knows edge is gone too.
+		let val =
+			run_gql(&ds, &ses, "MATCH (a:person)-[:knows]->(b:person) RETURN a.name AS a").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_insert_node_and_edge() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		// A leading INSERT (no MATCH) creates a node exactly once.
+		let val = run_gql(&ds, &ses, "INSERT (p:person {name: 'A'})").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		run_gql(&ds, &ses, "INSERT (p:person {name: 'B'})").await?;
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name ORDER BY name").await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { name: "A" },
+				object! { name: "B" }
+			])
+		);
+		// INSERT an edge between two MATCH-bound nodes.
+		run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person WHERE a.name = 'A') MATCH (b:person WHERE b.name = 'B') \
+			 INSERT (a)-[:knows]->(b)",
+		)
+		.await?;
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person)-[:knows]->(b:person) RETURN a.name AS a, b.name AS b",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { a: "A", b: "B" }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_label_mutation_rejected() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A';").await?;
+		let err = run_gql_err(&ds, &ses, "MATCH (n:person) SET n:Archived").await;
+		assert!(err.contains("Label mutation is not supported"), "{err}");
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_set_all_properties_replaces_and_multi_item() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30, city = 'L';").await?;
+		// `SET n = {…}` replaces ALL user properties (age is dropped).
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person) SET n = {name: 'A2', city: 'X'} RETURN n.name AS name, n.city AS city",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![object! { name: "A2", city: "X" }])
+		);
+		// The dropped `age` no longer matches.
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) WHERE n.age = 30 RETURN n.name AS name").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		// Multi-item SET on distinct properties.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person) SET n.age = 5, n.city = 'Z' RETURN n.age AS age, n.city AS city",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { age: 5, city: "Z" }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_multi_statement_set_last_wins() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 1;").await?;
+		// Two SET statements in one query: the second sees the first's write.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person) SET n.age = 5 SET n.age = n.age + 1 RETURN n.age AS age",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { age: 6 }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_edge_set_remove_delete() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(
+			&ds,
+			&ses,
+			"CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B'; \
+			 RELATE person:1->knows->person:2 SET since = 2020;",
+		)
+		.await?;
+		// SET a property on a bound edge.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person)-[k:knows]->(b:person) SET k.since = 2099 RETURN k.since AS since",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { since: 2099 }]));
+		// DELETE a bound edge (NODETACH default is fine: an edge has no sub-edges).
+		let val = run_gql(&ds, &ses, "MATCH (a:person)-[k:knows]->(b:person) DELETE k").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		let val =
+			run_gql(&ds, &ses, "MATCH (a:person)-[:knows]->(b:person) RETURN a.name AS a").await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_fanout_set_is_consistent_per_row() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(
+			&ds,
+			&ses,
+			"CREATE person:1 SET name = 'A', age = 30; CREATE person:2 SET name = 'B'; \
+			 CREATE person:3 SET name = 'C'; RELATE person:1->knows->person:2; \
+			 RELATE person:1->knows->person:3;",
+		)
+		.await?;
+		// `a` fans out to two rows; SET a.age = 7 must show a consistent AFTER image
+		// on both rows (the §1 fix — no stale pre-mutation binding on a duplicate).
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person)-[:knows]->(b:person) WHERE a.name = 'A' SET a.age = 7 \
+			 RETURN a.age AS age, b.name AS b ORDER BY b",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { age: 7, b: "B" },
+				object! { age: 7, b: "C" }
+			])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_detach_delete_nulls_cascaded_edge_binding() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(
+			&ds,
+			&ses,
+			"CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B'; \
+			 RELATE person:1->knows->person:2 SET since = 2020;",
+		)
+		.await?;
+		// DETACH DELETE on `a` cascades the `k` edge; the §3 fix nulls `k` in the
+		// RETURN rather than surfacing the stale (deleted) edge.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person)-[k:knows]->(b:person) WHERE a.name = 'A' DETACH DELETE a \
+			 RETURN a AS a, k AS k, b.name AS b",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![object! {
+				a: PublicValue::Null,
+				k: PublicValue::Null,
+				b: "B"
+			}])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_insert_left_edge_chain_and_repeated_anon() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
+			.await?;
+		// A left-pointing INSERT edge relates b -> a.
+		run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person WHERE a.name = 'A') MATCH (b:person WHERE b.name = 'B') \
+			 INSERT (a)<-[:knows]-(b)",
+		)
+		.await?;
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (x:person)-[:knows]->(y:person) RETURN x.name AS x, y.name AS y",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { x: "B", y: "A" }]));
+		// A chained INSERT creates three new nodes and two edges.
+		run_gql(
+			&ds,
+			&ses,
+			"INSERT (x:item {n: 1})-[:link]->(y:item {n: 2})-[:link]->(z:item {n: 3})",
+		)
+		.await?;
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:item)-[:link]->(b:item) RETURN a.n AS a, b.n AS b ORDER BY a",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { a: 1, b: 2 },
+				object! { a: 2, b: 3 }
+			])
+		);
+		// Repeated anonymous nodes in one INSERT create distinct records.
+		run_gql(&ds, &ses, "INSERT (:tag {v: 1}), (:tag {v: 1})").await?;
+		let val = run_gql(&ds, &ses, "MATCH (t:tag) RETURN t.v AS v ORDER BY v").await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![object! { v: 1 }, object! { v: 1 }])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_mutation_rejection_ledger() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		// Each lowers (or parses) to a precise rejection. No data needed — these
+		// fail before execution.
+		let cases: &[(&str, &str)] = &[
+			// Mutating a variable not bound by the read body.
+			("MATCH (n:person) SET x.age = 1", "Unknown variable"),
+			// Mutating a path variable (a composite, not a record).
+			("MATCH p = (a:person)-[:knows]->(b:person) SET p.x = 1", "group or path variable"),
+			// `SET a = {…}` setting a reserved key.
+			("MATCH (n:person) SET n = {id: 1}", "reserved `id` key"),
+			// Per-property SET of a reserved edge endpoint (the native write path
+			// would otherwise silently re-stamp `out`, so it is rejected up front).
+			("MATCH (a:person)-[k:knows]->(b:person) SET k.out = 1", "reserved `out` key"),
+			// Label mutation via REMOVE.
+			("MATCH (n:person) REMOVE n:Foo", "Label mutation is not supported"),
+			// INSERT re-declaring a MATCH-bound variable as a new (labelled) node.
+			("MATCH (a:person) INSERT (a:thing)", "already bound"),
+			// INSERT node that is neither labelled nor a bound-variable reference.
+			("INSERT (x)", "must declare a label"),
+			// Undirected INSERT edge.
+			("INSERT (a:person)~[:knows]~(b:person)", "Undirected INSERT edges"),
+			// DELETE of a non-variable expression.
+			("MATCH (n:person) DELETE n.age", "bound variable"),
+		];
+		for (query, expected) in cases {
+			let err = run_gql_err(&ds, &ses, query).await;
+			assert!(err.contains(expected), "query {query:?}: expected {expected:?}, got: {err}");
+		}
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_mutation_respects_record_permissions() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		// Owner: a table that denies create/update (but allows select), seeded
+		// with one row.
+		execute_all(
+			&ds,
+			&ses,
+			"DEFINE TABLE person SCHEMALESS \
+			 PERMISSIONS FOR select FULL, FOR create NONE, FOR update NONE, FOR delete NONE; \
+			 CREATE person:1 SET name = 'A', age = 30;",
+		)
+		.await?;
+		// A record-scoped session: table PERMISSIONS clauses apply (a role-based
+		// system session would bypass them, so this is the meaningful test).
+		let rec = Session::for_record(
+			"test",
+			"test",
+			"user",
+			surrealdb_types::Value::RecordId(surrealdb_types::RecordId::new("user", "tester")),
+		);
+		// Each write goes through the native document pipeline, so each is denied:
+		// INSERT (create), SET (update), DELETE (delete) all leave the row intact.
+		let _ = ds.execute_opengql("INSERT (p:person {name: 'B'})", &rec, None).await;
+		let _ = ds.execute_opengql("MATCH (n:person) SET n.age = 99", &rec, None).await;
+		let _ = ds.execute_opengql("MATCH (n:person) DETACH DELETE n", &rec, None).await;
+		// As owner: exactly the original row remains, unchanged.
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name, n.age AS age").await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![object! { name: "A", age: 30 }])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_nodetach_probe_ignores_select_permissions() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		// `person` is fully visible/deletable to a record session, but the `knows`
+		// edge table hides SELECT from it. Seed a node with one connected edge.
+		execute_all(
+			&ds,
+			&ses,
+			"DEFINE TABLE person SCHEMALESS \
+			 PERMISSIONS FOR select FULL, FOR create FULL, FOR update FULL, FOR delete FULL; \
+			 DEFINE TABLE knows SCHEMALESS \
+			 PERMISSIONS FOR select NONE, FOR create FULL, FOR update FULL, FOR delete FULL; \
+			 CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B'; \
+			 RELATE person:1->knows->person:2;",
+		)
+		.await?;
+		let rec = Session::for_record(
+			"test",
+			"test",
+			"user",
+			surrealdb_types::Value::RecordId(surrealdb_types::RecordId::new("user", "tester")),
+		);
+		// The NODETACH (default) connected-edge probe runs with permissions
+		// DISABLED, so it sees the `knows` edge the record session cannot SELECT and
+		// errors — rather than passing the guard and letting the native DELETE
+		// silently cascade an edge the caller opted out of removing.
+		let err = run_gql_err(&ds, &rec, "MATCH (n:person WHERE n.name = 'A') DELETE n").await;
+		assert!(err.contains("connected edges"), "{err}");
+		// The node (and its edge) survive the rejected delete.
+		let val =
+			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name ORDER BY name").await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { name: "A" },
+				object! { name: "B" }
+			])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_match_after_set_rereads_live_state() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(
+			&ds,
+			&ses,
+			"CREATE person:1 SET name = 'A', tier = 'bronze'; \
+			 CREATE person:2 SET name = 'B', tier = 'gold';",
+		)
+		.await?;
+		// A read step after a write re-scans the live (post-write) state in the same
+		// transaction: promoting A to gold and then MATCHing on `tier = 'gold'` finds
+		// both A (just written) and B.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person WHERE n.name = 'A') SET n.tier = 'gold' \
+			 MATCH (m:person WHERE m.tier = 'gold') RETURN m.name AS name ORDER BY name",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { name: "A" },
+				object! { name: "B" }
+			])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_match_after_delete_rereads_live_state() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
+			.await?;
+		// The trailing MATCH no longer observes the row the DELETE removed.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person WHERE n.name = 'A') DETACH DELETE n \
+			 MATCH (m:person) RETURN m.name AS name ORDER BY name",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { name: "B" }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_match_after_insert_sees_new_node_and_anchors_on_binding() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 20;").await?;
+		// A trailing MATCH re-scans and observes the just-inserted node, and can join
+		// on the binding the INSERT created (`a.age` anchors the predicate on `b`).
+		let val = run_gql(
+			&ds,
+			&ses,
+			"INSERT (a:person {name: 'New', age: 20}) \
+			 MATCH (b:person WHERE b.age = a.age) RETURN b.name AS name ORDER BY name",
+		)
+		.await?;
+		assert_eq!(
+			val,
+			PublicValue::Array(surrealdb_types::array![
+				object! { name: "A" },
+				object! { name: "New" }
+			])
+		);
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_optional_match_after_set_rereads_live_state() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
+			.await?;
+		// An OPTIONAL block after a write takes the general left-join path (the
+		// mutating accumulator is the join's probe side, the OPTIONAL read is its
+		// build side). The OPTIONAL must still observe the write: after promoting A
+		// to gold, `OPTIONAL MATCH (m:person WHERE m.tier = 'gold')` matches A (just
+		// written), so `m` is bound, NOT null-filled.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (n:person WHERE n.name = 'A') SET n.tier = 'gold' \
+			 OPTIONAL MATCH (m:person WHERE m.tier = 'gold') \
+			 RETURN n.name AS n, m.name AS m",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { n: "A", m: "A" }]));
+		Ok(())
+	}
+
+	#[cfg(feature = "opengql")]
+	#[tokio::test]
+	async fn gql_optional_match_after_insert_sees_new_node() -> Result<()> {
+		let (ds, ses) = opengql_test_ds().await?;
+		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A';").await?;
+		// An OPTIONAL block after an INSERT must see the just-created node. The
+		// INSERT runs once per matched `person`; the trailing OPTIONAL re-scans
+		// `tag` and binds `m` to the new node rather than null-filling it.
+		let val = run_gql(
+			&ds,
+			&ses,
+			"MATCH (a:person WHERE a.name = 'A') INSERT (t:tag {name: 'X'}) \
+			 OPTIONAL MATCH (m:tag) \
+			 RETURN m.name AS m",
+		)
+		.await?;
+		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { m: "X" }]));
+		Ok(())
+	}
+
 	async fn index_key_base(ds: &Datastore, table: &str, index: &str) -> Result<IndexKeyBase> {
 		let txn = ds.transaction(Read, Optimistic).await?;
 		let ns = txn.get_ns_by_name("test", None).await?.unwrap();
