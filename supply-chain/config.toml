@@ -106,7 +106,7 @@ version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ammonia]]
-version = "4.1.2"
+version = "4.1.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.approx]]
@@ -581,10 +581,6 @@ criteria = "safe-to-deploy"
 version = "2.0.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.futf]]
-version = "0.1.5"
-criteria = "safe-to-deploy"
-
 [[exemptions.futures]]
 version = "0.3.32"
 criteria = "safe-to-deploy"
@@ -734,7 +730,7 @@ version = "0.5.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.html5ever]]
-version = "0.35.0"
+version = "0.39.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.hyper-rustls]]
@@ -921,16 +917,12 @@ criteria = "safe-to-deploy"
 version = "0.15.7"
 criteria = "safe-to-deploy"
 
-[[exemptions.mac]]
-version = "0.1.1"
+[[exemptions.mach2]]
+version = "0.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.markup5ever]]
-version = "0.35.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.match_token]]
-version = "0.35.0"
+version = "0.39.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.matchit]]
@@ -1325,14 +1317,6 @@ criteria = "safe-to-deploy"
 version = "1.7.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.rmp]]
-version = "0.8.15"
-criteria = "safe-to-deploy"
-
-[[exemptions.rmp-serde]]
-version = "1.3.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.roaring]]
 version = "0.11.4"
 criteria = "safe-to-deploy"
@@ -1550,11 +1534,11 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.string_cache]]
-version = "0.8.9"
+version = "0.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.string_cache_codegen]]
-version = "0.5.4"
+version = "0.6.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.symbolic-common]]
@@ -1590,7 +1574,7 @@ version = "3.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tendril]]
-version = "0.4.3"
+version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.terminal_size]]
@@ -1790,7 +1774,7 @@ version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.web_atoms]]
-version = "0.1.3"
+version = "0.2.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-root-certs]]
