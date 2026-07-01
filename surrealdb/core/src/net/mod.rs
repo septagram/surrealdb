@@ -1,3 +1,26 @@
+//! Shared, capability-aware networking helpers for outbound HTTP requests.
+//!
+//! Both outbound clients in the engine must enforce SurrealDB's network
+//! capabilities — the general-purpose protected HTTP client (`crate::http`,
+//! behind the `http` feature) and the JWKS fetch client (`crate::iam::jwks`,
+//! behind the `jwks` feature). Enforcing the allow/deny rules on the requested
+//! hostname *string* alone is not sufficient: an allow-listed hostname can
+//! resolve (or be made to resolve, e.g. via DNS rebinding) to a loopback,
+//! link-local, cloud-metadata or otherwise private address. A direct URL to
+//! that IP would be denied by capabilities, but a host-string check performed
+//! before DNS resolution would let the request through (SSRF).
+//!
+//! To close that gap, this module provides [`FilteringResolver`], a
+//! `reqwest`-compatible DNS resolver that re-checks every resolved IP address
+//! against the configured allow/deny rules and blocks private/special-use
+//! addresses unless they are explicitly allowed. It lives here, rather than in
+//! `crate::http`, so the JWKS path can reuse it without depending on the `http`
+//! feature.
+//!
+//! The entire module is gated to non-WASM targets because it depends on
+//! `tokio`'s system DNS resolver; on WASM the outbound clients are built
+//! without a custom resolver.
+
 use std::error::Error;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -7,8 +30,14 @@ use ipnet::IpNet;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use tokio::net::lookup_host;
 
-use super::NetFilter;
 use crate::dbs::capabilities::{NetTarget, Targets};
+
+/// The allow/deny network rules applied to outbound requests, shared between an
+/// outbound client's redirect policy and its [`FilteringResolver`].
+pub(crate) struct NetFilter {
+	pub(crate) allow: Targets<NetTarget>,
+	pub(crate) deny: Targets<NetTarget>,
+}
 
 /// Returns `true` for IP addresses that belong to private, loopback, link-local,
 /// or other special-use ranges defined in the IANA Special-Purpose Address
@@ -35,12 +64,18 @@ fn is_private_ip(ip: IpAddr) -> bool {
 	}
 }
 
-pub struct FilteringResolver {
-	pub filter: Arc<NetFilter>,
+/// A `reqwest` DNS resolver that enforces network capabilities at the IP level.
+///
+/// The hostname is first checked against the allow/deny rules, then resolved,
+/// and finally every resolved address is checked again so that an allow-listed
+/// hostname cannot be used to reach a private/special-use IP that is not itself
+/// explicitly allowed.
+pub(crate) struct FilteringResolver {
+	pub(crate) filter: Arc<NetFilter>,
 }
 
 impl FilteringResolver {
-	pub fn from_net_filter(filter: Arc<NetFilter>) -> Self {
+	pub(crate) fn from_net_filter(filter: Arc<NetFilter>) -> Self {
 		FilteringResolver {
 			filter,
 		}

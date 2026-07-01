@@ -290,20 +290,39 @@ fn check_capabilities_url(kvs: &Datastore, url: &str) -> Result<()> {
 // Builds the HTTP client used to fetch JWKS objects.
 //
 // The JWKS path does not depend on the `http` feature, so it cannot reuse the
-// datastore's protected `HttpClient`. To prevent server-side request forgery
-// (SSRF) via redirects, the client installs a redirect policy that re-validates
-// every redirect target against the datastore's network capabilities — the same
-// allow/deny check applied to the original URL by `check_capabilities_url`.
-// Without this, the default `reqwest` client follows up to 10 redirects to
-// arbitrary hosts (e.g. cloud metadata endpoints) that were never authorised.
+// datastore's protected `HttpClient`. Two complementary defences against
+// server-side request forgery (SSRF) are installed here, mirroring the
+// protections applied to the general-purpose HTTP client:
+//
+//  1. A redirect policy re-validates every redirect target host against the datastore's network
+//     capabilities — the same allow/deny check applied to the original URL by
+//     `check_capabilities_url`. Without it, the default `reqwest` client follows up to 10 redirects
+//     to arbitrary hosts (e.g. cloud metadata endpoints) that were never authorised.
+//
+//  2. A capability-aware DNS resolver (`crate::net::FilteringResolver`) re-checks the IP addresses
+//     each hostname resolves to. The host-string check above only inspects the URL text, so an
+//     allow-listed hostname that resolves to a loopback, link-local, cloud-metadata or private
+//     address would otherwise be fetched even though a direct URL to that IP would be denied
+//     (GHSA-5x4x-2946-qr67 — a sibling of the redirect SSRF). The resolver blocks
+//     private/special-use IPs unless they are explicitly allowed, and applies to redirect targets
+//     as well as the original URL.
 #[cfg(not(target_family = "wasm"))]
 fn build_jwks_client(kvs: &Datastore) -> Result<Client> {
 	use reqwest::redirect::Policy;
+
+	use crate::net::{FilteringResolver, NetFilter};
 
 	// Snapshot the capabilities and redirect budget so the policy closure (which
 	// must be `'static + Send + Sync`) does not borrow the datastore.
 	let capabilities = Arc::new(kvs.get_capabilities().clone());
 	let max_redirects = kvs.config().max_http_redirects;
+
+	// Build the DNS-level filter from the same capability snapshot before the
+	// `capabilities` handle is moved into the redirect policy closure below.
+	let filter = Arc::new(NetFilter {
+		allow: capabilities.allow_net.clone(),
+		deny: capabilities.deny_net.clone(),
+	});
 
 	let policy = Policy::custom(move |attempt| {
 		if attempt.previous().len() >= max_redirects {
@@ -329,7 +348,10 @@ fn build_jwks_client(kvs: &Datastore) -> Result<Client> {
 		}
 	});
 
-	Ok(Client::builder().redirect(policy).build()?)
+	Ok(Client::builder()
+		.redirect(policy)
+		.dns_resolver(FilteringResolver::from_net_filter(filter))
+		.build()?)
 }
 
 // Attempts to fetch a JWKS object from a remote location and stores it in the
@@ -1069,5 +1091,133 @@ mod tests {
 
 		// `internal_server` mock is configured with `.expect(0)`: the assertion is
 		// enforced when the server is dropped at the end of the test.
+	}
+
+	// Reproduction for GHSA-5x4x-2946-qr67: SSRF via a JWKS URL whose hostname is
+	// allow-listed but resolves to a private/loopback address.
+	//
+	// `check_capabilities_url` validates only the URL *host string*. Before the
+	// fix, the JWKS client used the default `reqwest` resolver, so an allow-listed
+	// hostname that resolves to loopback was fetched even though a direct URL to
+	// the same loopback IP is rejected. After the fix, the client installs a
+	// capability-aware DNS resolver that re-checks the resolved IP and blocks the
+	// private address, so the internal server is never contacted.
+	#[tokio::test]
+	#[cfg(not(target_family = "wasm"))]
+	async fn test_allowed_hostname_resolving_to_loopback_is_blocked() {
+		// JWKS server on loopback. With the fix it must never be reached via the
+		// allow-listed hostname (`expect(0)` is verified on drop).
+		let mock_server = MockServer::start().await;
+		let jwks_path = format!("{}/jwks.json", random_path());
+		Mock::given(method("GET"))
+			.and(path(&jwks_path))
+			.respond_with(ResponseTemplate::new(200).set_body_json(DEFAULT_JWKS.clone()))
+			.expect(0)
+			.mount(&mock_server)
+			.await;
+		let port = mock_server.address().port();
+
+		// Allow only the *hostname* `localhost`, not the loopback IP it resolves to.
+		let ds = Datastore::builder()
+			.with_capabilities(Capabilities::default().with_network_targets(
+				Targets::<NetTarget>::Some([NetTarget::from_str("localhost").unwrap()].into()),
+			))
+			.build_with_path("memory")
+			.await
+			.unwrap();
+
+		// Negative control: a direct loopback URL is rejected by the host-string
+		// capability check before any connection is attempted.
+		let direct = config(
+			&ds,
+			"test_1",
+			&format!("http://127.0.0.1:{port}/{jwks_path}"),
+			jsonwebtoken::Algorithm::RS256,
+		)
+		.await;
+		assert!(direct.is_err(), "direct loopback URL should be rejected by capabilities");
+
+		// The allow-listed hostname resolves to loopback; the capability-aware
+		// resolver must block the resolved private IP, so the fetch fails and the
+		// server is never contacted.
+		let rebinding = config(
+			&ds,
+			"test_1",
+			&format!("http://localhost:{port}/{jwks_path}"),
+			jsonwebtoken::Algorithm::RS256,
+		)
+		.await;
+		assert!(
+			rebinding.is_err(),
+			"JWKS fetch to an allow-listed hostname resolving to a private IP must be blocked"
+		);
+
+		// `mock_server` is configured with `.expect(0)`: enforced on drop.
+	}
+
+	// Reproduction for GHSA-5x4x-2946-qr67 on the redirect path: the
+	// capability-aware resolver must also guard redirect hops. A redirect to an
+	// allow-listed *hostname* that resolves to loopback passes the redirect
+	// host-string check, so only the resolver can block the resolved private IP.
+	#[tokio::test]
+	#[cfg(not(target_family = "wasm"))]
+	async fn test_redirect_to_allowed_hostname_resolving_to_loopback_is_blocked() {
+		// Internal server the redirect points at, via an allow-listed hostname
+		// that resolves to loopback. It must never receive a request.
+		let internal_server = MockServer::start().await;
+		let internal_path = format!("{}/jwks.json", random_path());
+		Mock::given(method("GET"))
+			.and(path(&internal_path))
+			.respond_with(ResponseTemplate::new(200).set_body_json(DEFAULT_JWKS.clone()))
+			.expect(0)
+			.mount(&internal_server)
+			.await;
+		let internal_port = internal_server.address().port();
+		// Point at the internal server via the `localhost` hostname (resolves to a
+		// loopback IP), not the literal IP.
+		let redirect_location = format!("http://localhost:{internal_port}/{internal_path}");
+
+		// Allow-listed public server that 302-redirects to the internal server.
+		let public_server = MockServer::start().await;
+		let public_path = format!("{}/jwks.json", random_path());
+		Mock::given(method("GET"))
+			.and(path(&public_path))
+			.respond_with(
+				ResponseTemplate::new(302).insert_header("Location", redirect_location.as_str()),
+			)
+			.mount(&public_server)
+			.await;
+		let public_port = public_server.address().port();
+
+		// Allow the public server by IP:port (first hop) and the internal host by
+		// name. The redirect host-string check passes for `localhost`, so the
+		// resolver is the only thing that can block the loopback IP it resolves to.
+		let ds = Datastore::builder()
+			.with_capabilities(
+				Capabilities::default().with_network_targets(Targets::<NetTarget>::Some(
+					[
+						NetTarget::from_str(&format!("127.0.0.1:{public_port}")).unwrap(),
+						NetTarget::from_str("localhost").unwrap(),
+					]
+					.into(),
+				)),
+			)
+			.build_with_path("memory")
+			.await
+			.unwrap();
+
+		let res = config(
+			&ds,
+			"test_1",
+			&format!("http://127.0.0.1:{public_port}/{public_path}"),
+			jsonwebtoken::Algorithm::RS256,
+		)
+		.await;
+		assert!(
+			res.is_err(),
+			"JWKS fetch following a redirect to an allow-listed hostname that resolves to loopback must be blocked"
+		);
+
+		// `internal_server` is configured with `.expect(0)`: enforced on drop.
 	}
 }

@@ -61,6 +61,11 @@ pub mod iam;
 pub mod idx;
 pub mod kvs;
 pub mod mem;
+// Capability-aware networking helpers shared by the outbound HTTP clients
+// (`http` feature) and the JWKS fetch client (`jwks` feature). Not available on
+// WASM, where the clients are built without a custom DNS resolver.
+#[cfg(all(not(target_family = "wasm"), any(feature = "http", feature = "jwks")))]
+mod net;
 pub mod obs;
 pub mod observe;
 pub mod options;
