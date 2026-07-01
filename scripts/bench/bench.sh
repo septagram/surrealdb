@@ -32,12 +32,14 @@ Usage:
 Options:
   --profile          record a samply flamegraph instead of measuring timing
   --save             persist this run as the new baseline (measure mode only)
+  --quick            fast, coarse pass: shrinks every timing knob ~10x
   --dataset <name>   for a matrix scan, restrict to one variant (e.g. indexed, unindexed)
   --backend <name>   storage backend (default: mem)
 
 Examples:
   cargo make bench -- scans/count
   cargo make bench -- scans/count --save
+  cargo make bench -- scans/count --quick
   cargo make bench -- scans/where_integer_in_many_full --profile --dataset indexed
 EOF
 }

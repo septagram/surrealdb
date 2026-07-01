@@ -9,11 +9,14 @@
 # optimisation loop. Within ~1-3% of full-LTO release on hot loops.
 #
 # Usage:
-#   scripts/bench/measure.sh <bench-filter> [--backend mem] [--save] [--out-dir DIR]
+#   scripts/bench/measure.sh <bench-filter> [--backend mem] [--save] [--quick] [--dataset NAME] [--out-dir DIR]
 #
 #   --save   Persist this run as the new baseline in the comparison datastore
 #            (passes `--save` to `bench run`). Omit for a dry comparison against
 #            the existing baseline.
+#
+#   --quick  Fast, coarse pass: shrinks every timing knob ~10x (passes `--quick`
+#            to `bench run`). Catches large regressions, not small drift.
 #
 # The comparison block is produced by the harness itself
 # (language-tests/src/cmd/bench/run.rs): it prints "Performance has improved" /
@@ -28,13 +31,14 @@ set -euo pipefail
 if [[ "${1:-}" == "--" ]]; then shift; fi
 
 if [[ $# -lt 1 ]]; then
-	echo "usage: $0 <bench-filter> [--backend mem] [--save] [--dataset NAME] [--out-dir DIR]" >&2
+	echo "usage: $0 <bench-filter> [--backend mem] [--save] [--quick] [--dataset NAME] [--out-dir DIR]" >&2
 	exit 2
 fi
 
 FILTER="$1"; shift
 BACKEND="mem"
 SAVE=""
+QUICK=""
 DATASET=()
 OUT_DIR="./target/bench-profile"
 
@@ -42,6 +46,7 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--backend) BACKEND="$2"; shift 2 ;;
 		--save) SAVE="--save"; shift ;;
+		--quick) QUICK="--quick"; shift ;;
 		--dataset) DATASET=(--dataset "$2"); shift 2 ;;
 		--out-dir) OUT_DIR="$2"; shift 2 ;;
 		*) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -58,7 +63,7 @@ LOG="$ROOT/$OUT_DIR/$SLUG.measure.txt"
 FEATURES="bench"; [ "$BACKEND" = "rocksdb" ] && FEATURES="bench,backend-rocksdb"
 
 # shellcheck disable=SC2086
-cargo run --profile profiling --features "$FEATURES" -- bench run --backend "$BACKEND" $SAVE ${DATASET[@]+"${DATASET[@]}"} "$FILTER" \
+cargo run --profile profiling --features "$FEATURES" -- bench run --backend "$BACKEND" $SAVE $QUICK ${DATASET[@]+"${DATASET[@]}"} "$FILTER" \
 	2>&1 | tee "$LOG"
 
 echo ""

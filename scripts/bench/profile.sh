@@ -13,7 +13,7 @@
 # uses `dtrace`, which is SIP-restricted on macOS).
 #
 # Usage:
-#   scripts/bench/profile.sh <bench-filter> [--backend mem] [--dataset NAME] [--out-dir DIR]
+#   scripts/bench/profile.sh <bench-filter> [--backend mem] [--quick] [--dataset NAME] [--out-dir DIR]
 #
 #   <bench-filter>  Substring matched against the bench file path. Must select
 #                   exactly one bench. For a matrix scan that runs both dataset
@@ -33,7 +33,7 @@ set -euo pipefail
 if [[ "${1:-}" == "--" ]]; then shift; fi
 
 if [[ $# -lt 1 ]]; then
-	echo "usage: $0 <bench-filter> [--backend mem] [--dataset NAME] [--out-dir DIR]" >&2
+	echo "usage: $0 <bench-filter> [--backend mem] [--quick] [--dataset NAME] [--out-dir DIR]" >&2
 	exit 2
 fi
 
@@ -46,6 +46,7 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--backend) BACKEND="$2"; shift 2 ;;
 		--out-dir) OUT_DIR="$2"; shift 2 ;;
+		--quick) EXTRA+=(--quick); shift ;;
 		--dataset) EXTRA+=(--dataset "$2"); shift 2 ;;
 		*) echo "unknown arg: $1" >&2; exit 2 ;;
 	esac
