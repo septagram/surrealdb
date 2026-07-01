@@ -1,4 +1,4 @@
-//! OpenGQL (ISO GQL) query execution.
+//! GQL (ISO/IEC 39075) query execution.
 
 use rmcp::ErrorData;
 use rmcp::model::CallToolResult;
@@ -10,7 +10,7 @@ use crate::session::McpSession;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GqlParams {
-	/// The OpenGQL (ISO GQL) query to execute, e.g.
+	/// The GQL (ISO/IEC 39075) query to execute, e.g.
 	/// `MATCH (p:person) RETURN p.name AS name ORDER BY name`.
 	pub query: String,
 	/// Optional JSON object of parameter bindings (e.g. {"name": "John"}).
@@ -27,6 +27,6 @@ pub async fn execute(session: &McpSession, params: GqlParams) -> Result<CallTool
 		Some(ref json) => Some(json_to_variables(json, session.config(), core.as_ref())?),
 		None => None,
 	};
-	let results = session.execute_opengql(&params.query, vars).await?;
+	let results = session.execute_gql(&params.query, vars).await?;
 	Ok(multi_statement_result(results, session.config().max_result_bytes))
 }

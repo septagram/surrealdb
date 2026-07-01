@@ -181,7 +181,7 @@ fn to_object(value: Value) -> JsonObject {
 pub(crate) fn attach<S>(router: &mut ToolRouter<S>) {
 	for (name, route) in router.map.iter_mut() {
 		let schema = match name.as_ref() {
-			// `gql` (OpenGQL) returns the same multi-statement shape as `query`.
+			// `gql` (GQL) returns the same multi-statement shape as `query`.
 			"query" | "gql" => multi_statement_schema(),
 			"graphql" => graphql_schema(),
 			"use" => use_schema(),

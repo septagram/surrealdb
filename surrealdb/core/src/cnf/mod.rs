@@ -274,7 +274,7 @@ pub struct CommonConfig {
 	/// Maximum number of build-side rows a GQL `MATCH` hash join (and the
 	/// whole-row `Distinct` dedup that rides the same budget) may hold in memory
 	/// before failing the query (default: 1,000,000). Bounds the in-memory
-	/// build/seen set for OpenGQL v2 binding-table execution; spill to disk is a
+	/// build/seen set for GQL v2 binding-table execution; spill to disk is a
 	/// future change (matching the `Aggregate` stance). Errors that trip this
 	/// guard name the env knob (`SURREAL_GQL_MAX_JOIN_BUILD_ROWS`).
 	pub gql_max_join_build_rows: usize,
@@ -645,7 +645,7 @@ pub static REGEX_CACHE_SIZE: LazyLock<usize> =
 pub static SURREALISM_MAX_POOL_SIZE: LazyLock<usize> =
 	lazy_env_parse!("SURREAL_SURREALISM_MAX_POOL_SIZE", usize, 8);
 
-// The OpenGQL v2 MATCH resource limits (`gql_max_join_build_rows`,
+// The GQL v2 MATCH resource limits (`gql_max_join_build_rows`,
 // `gql_max_path_rows`, `gql_max_output_rows`) live on `CommonConfig` above, not
 // as global statics: every operator that reads them already has the execution
 // `CommonConfig` in hand (`ctx.root().ctx.config`), so they are per-datastore
@@ -727,7 +727,7 @@ mod tests {
 		assert!(!config.topk_threshold_pushdown_enabled, "config map disables the feature");
 	}
 
-	/// The OpenGQL v2 MATCH resource limits live on `CommonConfig` (not as global
+	/// The GQL v2 MATCH resource limits live on `CommonConfig` (not as global
 	/// statics): they default to 1M and parse from the config map under the same
 	/// keys `ConfigMap::from_env` derives from `SURREAL_GQL_MAX_*`, so the env
 	/// vars keep working and embedded callers can set them programmatically.

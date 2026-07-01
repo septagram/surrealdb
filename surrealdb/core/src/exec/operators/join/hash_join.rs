@@ -3,7 +3,7 @@
 //! `HashJoin` combines the binding tables produced by two MATCH sub-plans —
 //! either two comma-separated patterns inside one `MATCH`, or two sequential
 //! `MATCH` clauses — that share zero or more *node* variables (the planner makes
-//! repeated node variables join keys, see `doc/opengql/V2_DESIGN.md` §6). Each
+//! repeated node variables join keys, see `doc/gql/V2_DESIGN.md` §6). Each
 //! input row is a `Value::Object` keyed by binding name (the binding-row
 //! convention, §3); the output row is the union of a build row and a probe row.
 //!
@@ -83,11 +83,11 @@
 //! its rows buffered (bounded by the same build budget) before the build is
 //! constructed and the buffered rows replayed. See `execute`.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

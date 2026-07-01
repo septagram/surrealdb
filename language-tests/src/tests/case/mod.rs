@@ -40,11 +40,11 @@ pub struct Origin {
 }
 
 /// The query language a test case is written in, derived from the file
-/// extension: `.surql` is SurrealQL, `.gql` is OpenGQL, `.graphql` is GraphQL.
+/// extension: `.surql` is SurrealQL, `.gql` is GQL, `.graphql` is GraphQL.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Dialect {
 	SurrealQl,
-	OpenGql,
+	Gql,
 	GraphQl,
 }
 
@@ -251,7 +251,7 @@ impl CaseSet {
 		ok
 	}
 
-	/// Loads every `.surql` (SurrealQL), `.gql` (OpenGQL) and `.graphql`
+	/// Loads every `.surql` (SurrealQL), `.gql` (GQL) and `.graphql`
 	/// (GraphQL) file under `root` (recursively) into a [`CaseSet`].
 	///
 	/// Each file's config comment is parsed into a [`TestCase`] keyed by its path
@@ -272,7 +272,7 @@ impl CaseSet {
 			let dialect = if path.ends_with(".surql") {
 				Dialect::SurrealQl
 			} else if path.ends_with(".gql") {
-				Dialect::OpenGql
+				Dialect::Gql
 			} else if path.ends_with(".graphql") {
 				Dialect::GraphQl
 			} else {

@@ -1597,12 +1597,12 @@ pub trait RpcProtocol {
 		session_id: Uuid,
 		params: PublicArray,
 	) -> Result<DbResult, surrealdb_types::Error> {
-		#[cfg(not(feature = "opengql"))]
+		#[cfg(not(feature = "gql"))]
 		{
 			let _ = (txn, session_id, params);
 			Err(method_not_found(Method::Gql.to_string()))
 		}
-		#[cfg(feature = "opengql")]
+		#[cfg(feature = "gql")]
 		{
 			let session_lock = self.get_session(&session_id)?;
 			let session = session_lock.read().await;
@@ -1637,7 +1637,7 @@ pub trait RpcProtocol {
 			};
 
 			// Parse and lower the GQL query into a prepared plan
-			let plan = self.kvs().parse_opengql(&query)?;
+			let plan = self.kvs().parse_gql(&query)?;
 
 			Ok(DbResult::Query(
 				run_query(self, txn, session_id, QueryForm::Plan(plan), vars)
@@ -1721,7 +1721,7 @@ pub trait RpcProtocol {
 			// `/graphql` transport does. Schema/config failures map to errors;
 			// GraphQL execution errors ride back in the response envelope.
 			let ds = self.kvs_arc();
-			let json = crate::gql::execute_request(&ds, &session, query, variables, operation)
+			let json = crate::graphql::execute_request(&ds, &session, query, variables, operation)
 				.await
 				.map_err(|e| surrealdb_types::Error::query(e.to_string(), None))?;
 
@@ -1927,9 +1927,9 @@ enum QueryForm<'a> {
 	Text(&'a str),
 	Parsed(Ast),
 	/// A pre-lowered GQL query. Only constructed by the `gql` handler, which
-	/// is itself gated behind the `opengql` feature.
-	#[cfg(feature = "opengql")]
-	Plan(crate::opengql::PreparedGqlQuery),
+	/// is itself gated behind the `gql` feature.
+	#[cfg(feature = "gql")]
+	Plan(crate::gql::PreparedGqlQuery),
 }
 
 async fn run_query<T>(
@@ -1971,15 +1971,15 @@ where
 			(QueryForm::Parsed(ast), None) => {
 				this.kvs().process_with_transaction(ast, &session, vars, tx).await?
 			}
-			#[cfg(feature = "opengql")]
+			#[cfg(feature = "gql")]
 			(QueryForm::Plan(plan), Some(cancel)) => {
 				this.kvs()
-					.process_opengql_with_transaction_and_cancel(plan, &session, vars, tx, cancel)
+					.process_gql_with_transaction_and_cancel(plan, &session, vars, tx, cancel)
 					.await?
 			}
-			#[cfg(feature = "opengql")]
+			#[cfg(feature = "gql")]
 			(QueryForm::Plan(plan), None) => {
-				this.kvs().process_opengql_with_transaction(plan, &session, vars, tx).await?
+				this.kvs().process_gql_with_transaction(plan, &session, vars, tx).await?
 			}
 		}
 	} else {
@@ -1993,12 +1993,12 @@ where
 				this.kvs().process_with_cancel(ast, &session, vars, cancel).await?
 			}
 			(QueryForm::Parsed(ast), None) => this.kvs().process(ast, &session, vars).await?,
-			#[cfg(feature = "opengql")]
+			#[cfg(feature = "gql")]
 			(QueryForm::Plan(plan), Some(cancel)) => {
-				this.kvs().process_opengql_with_cancel(plan, &session, vars, cancel).await?
+				this.kvs().process_gql_with_cancel(plan, &session, vars, cancel).await?
 			}
-			#[cfg(feature = "opengql")]
-			(QueryForm::Plan(plan), None) => this.kvs().process_opengql(plan, &session, vars).await?,
+			#[cfg(feature = "gql")]
+			(QueryForm::Plan(plan), None) => this.kvs().process_gql(plan, &session, vars).await?,
 		}
 	};
 

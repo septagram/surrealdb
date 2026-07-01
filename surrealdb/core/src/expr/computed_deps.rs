@@ -171,7 +171,7 @@ impl Visitor for FieldDependencyExtractor {
 			// GQL MATCH reads arbitrary fields/tables at runtime via the planner;
 			// treat it as opaque (cannot appear in a permission clause, but stay
 			// safe if it ever does).
-			#[cfg(feature = "opengql")]
+			#[cfg(feature = "gql")]
 			Expr::Match(_) => {
 				self.is_complete = false;
 				expr.visit(self)?;

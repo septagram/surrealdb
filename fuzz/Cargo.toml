@@ -13,7 +13,7 @@ tokio = "1.52.1"
 
 [dependencies.surrealdb-core]
 path = "../surrealdb/core"
-features = ["kv-mem", "arbitrary", "opengql"]
+features = ["kv-mem", "arbitrary", "gql"]
 default-features = false
 
 [dependencies.surrealdb-types]
@@ -36,8 +36,8 @@ test = false
 doc = false
 
 [[bin]]
-name = "fuzz_opengql_parser"
-path = "fuzz_targets/fuzz_opengql_parser.rs"
+name = "fuzz_gql_parser"
+path = "fuzz_targets/fuzz_gql_parser.rs"
 test = false
 doc = false
 

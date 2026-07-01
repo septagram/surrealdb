@@ -249,7 +249,7 @@ async fn stdio_call_graphql_returns_envelope() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stdio_call_gql_reports_disabled_capability() {
 	// The default in-memory datastore does not enable the experimental
-	// `opengql` capability. The `gql` tool must still be registered and return
+	// `gql` capability. The `gql` tool must still be registered and return
 	// a clear in-band error rather than being absent from the tool surface.
 	let (client, server) = spawn_server().await;
 
@@ -260,7 +260,7 @@ async fn stdio_call_gql_reports_disabled_capability() {
 		.expect("gql tool call");
 	let text = tool_text(&result);
 	assert!(
-		text.contains("opengql") && text.contains("not enabled"),
+		text.contains("gql") && text.contains("not enabled"),
 		"expected an experimental-capability error: {text}"
 	);
 

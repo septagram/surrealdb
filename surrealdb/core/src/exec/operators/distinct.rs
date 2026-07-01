@@ -1,7 +1,7 @@
 //! `Distinct` — whole-row dedup for `RETURN DISTINCT`.
 //!
 //! Sits above `Project` in the DISTINCT pipeline (`Project → Distinct →
-//! Sort(columns) → Limit`, `doc/opengql/V2_DESIGN.md` §5). It emits the first
+//! Sort(columns) → Limit`, `doc/gql/V2_DESIGN.md` §5). It emits the first
 //! occurrence of each distinct projected row and drops later duplicates,
 //! preserving the input stream order so the downstream `Sort` orders only over
 //! the returned columns (R7).
@@ -14,11 +14,11 @@
 //! that names the knob. Spill to disk is a future change, matching the
 //! `Aggregate` stance.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

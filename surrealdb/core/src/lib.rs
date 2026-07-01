@@ -51,8 +51,10 @@ pub mod env;
 pub mod err;
 pub mod exec;
 pub mod expr;
-#[cfg(feature = "graphql")]
+#[cfg(feature = "gql")]
 pub mod gql;
+#[cfg(feature = "graphql")]
+pub mod graphql;
 #[cfg(feature = "http")]
 mod http;
 pub mod iam;
@@ -61,8 +63,6 @@ pub mod kvs;
 pub mod mem;
 pub mod obs;
 pub mod observe;
-#[cfg(feature = "opengql")]
-pub mod opengql;
 pub mod options;
 pub mod rnd;
 pub mod rpc;

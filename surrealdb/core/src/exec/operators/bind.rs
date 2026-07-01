@@ -4,17 +4,17 @@
 //! already applies table/field permissions, computed fields, and any pushed
 //! pre-decode filter). It maps each input value `v` to the binding row
 //! `{ name: v }` — a `Value::Object` with one entry, keyed by the binding name
-//! (the binding-row convention, `doc/opengql/V2_DESIGN.md` §3). Downstream
+//! (the binding-row convention, `doc/gql/V2_DESIGN.md` §3). Downstream
 //! operators (Expand / EndpointBind / joins) read and extend that object.
 //!
 //! `Bind` is structurally transparent: it neither reorders nor drops rows, so
 //! it delegates `cardinality_hint` and `output_ordering` to its input.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::sync::Arc;
 

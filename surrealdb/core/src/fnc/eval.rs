@@ -12,8 +12,8 @@
 //! 3. the dedicated eval subject gate ([`Capabilities::allows_eval_query`]), which defaults to
 //!    denied for every subject.
 //!
-//! `eval::gql` additionally inherits the `opengql` experimental gate, which
-//! [`crate::opengql::parse_with_capabilities`] enforces itself.
+//! `eval::gql` additionally inherits the `gql` experimental gate, which
+//! [`crate::gql::parse_with_capabilities`] enforces itself.
 //!
 //! ## Subject derivation
 //!
@@ -55,7 +55,7 @@
 //!
 //! When invoked from the streaming executor (`exec/function/builtin/eval.rs`) the
 //! nested query is planned and evaluated on the streaming engine — required for
-//! `eval::gql`, since OpenGQL `MATCH` only runs there. When invoked from the
+//! `eval::gql`, since GQL `MATCH` only runs there. When invoked from the
 //! legacy `compute` path the nested query runs via [`Block::compute`]; this
 //! supports `eval::surql`, while `eval::gql` requires the streaming engine and
 //! errors otherwise (consistent with top-level GQL). Both entry points share
@@ -114,11 +114,11 @@ pub(crate) fn prepare(
 		bail!(Error::FunctionNotAllowed(name.to_string()));
 	}
 
-	// --- Parse with the live capabilities (so the `opengql` experimental gate
+	// --- Parse with the live capabilities (so the `gql` experimental gate
 	// and any SurrealQL experimental gates are honoured) and default parser
 	// limits (matching the embedded-scripting `surrealdb.query()` bridge). Both
 	// dialects are normalised to a `LogicalPlan`: SurrealQL parses to a `sql::Ast`
-	// (converted via `From`); OpenGQL lowers directly to a `PreparedGqlQuery`
+	// (converted via `From`); GQL lowers directly to a `PreparedGqlQuery`
 	// wrapping a `LogicalPlan`.
 	let config = crate::cnf::CommonConfig::default();
 	let plan: LogicalPlan = match dialect {
@@ -128,19 +128,19 @@ pub(crate) fn prepare(
 				message: e.to_string(),
 			})?
 			.into(),
-		#[cfg(feature = "opengql")]
+		#[cfg(feature = "gql")]
 		Dialect::Gql => {
-			crate::opengql::parse_with_capabilities(query, caps, &config)
+			crate::gql::parse_with_capabilities(query, caps, &config)
 				.map_err(|e| Error::InvalidFunction {
 					name: name.to_string(),
 					message: e.to_string(),
 				})?
 				.0
 		}
-		#[cfg(not(feature = "opengql"))]
+		#[cfg(not(feature = "gql"))]
 		Dialect::Gql => bail!(Error::InvalidFunction {
 			name: name.to_string(),
-			message: "OpenGQL support was not enabled at compile time".to_string(),
+			message: "GQL support was not enabled at compile time".to_string(),
 		}),
 	};
 

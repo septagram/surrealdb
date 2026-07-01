@@ -4,7 +4,7 @@
 //! block is planned with `expr_to_physical_expr` and evaluated against an
 //! isolated child of the current `ExecutionContext` (only the explicit bindings
 //! visible — never the call site's scope). Running on the streaming engine is
-//! required for `eval::gql`, since OpenGQL `MATCH` only executes there, and it
+//! required for `eval::gql`, since GQL `MATCH` only executes there, and it
 //! avoids bridging back to the legacy `compute` path (no reblessive `TreeStack`).
 //!
 //! Capability gating, parsing and statement validation live in
@@ -36,7 +36,7 @@ use crate::val::{Object, Value};
 /// Evaluate a prepared eval query on the streaming engine, isolated from the
 /// call site's scope and bound to the current transaction.
 ///
-/// `prepare` yields a single statement (SurrealQL is restricted to one; OpenGQL
+/// `prepare` yields a single statement (SurrealQL is restricted to one; GQL
 /// lowers to a single `Expr::Match`). Each statement is run through
 /// [`evaluate_expr_at_depth`], the streaming engine's plan-or-compute bridge: it
 /// plans the statement into operators — including the `Expr::Match` operator that

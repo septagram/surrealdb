@@ -112,8 +112,8 @@ impl CaseConfig {
 			// GQL test does not pin its own strategy, default it away from
 			// `compute-only`. Explicit presence is detected from the raw TOML
 			// (serde defaults erase the omitted-vs-default distinction).
-			if dialect == Dialect::OpenGql && !planner_strategy_present(&toml) {
-				config.env.planner_strategy = default_opengql_planner_strategy();
+			if dialect == Dialect::Gql && !planner_strategy_present(&toml) {
+				config.env.planner_strategy = default_gql_planner_strategy();
 			}
 
 			Ok(Self {
@@ -125,8 +125,8 @@ impl CaseConfig {
 			let mut parsed = TestConfig::default();
 			// No config block: a `.gql` test still needs the dialect-aware
 			// strategy default (see the configured branch above).
-			if dialect == Dialect::OpenGql {
-				parsed.env.planner_strategy = default_opengql_planner_strategy();
+			if dialect == Dialect::Gql {
+				parsed.env.planner_strategy = default_gql_planner_strategy();
 			}
 			Ok(Self {
 				range: None,
@@ -140,7 +140,7 @@ impl CaseConfig {
 /// The planner strategies a `.gql` test runs under when it does not pin its
 /// own `planner-strategy`. `compute-only` is omitted because `Expr::Match`
 /// only executes on the streaming engine.
-fn default_opengql_planner_strategy() -> Vec<NewPlannerStrategyConfig> {
+fn default_gql_planner_strategy() -> Vec<NewPlannerStrategyConfig> {
 	vec![NewPlannerStrategyConfig::AllRo, NewPlannerStrategyConfig::BestEffortRo]
 }
 

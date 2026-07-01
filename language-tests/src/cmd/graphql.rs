@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use surrealdb_core::dbs::Session;
-use surrealdb_core::gql::cache::GraphQLSchemaCache;
+use surrealdb_core::graphql::cache::GraphQLSchemaCache;
 use surrealdb_core::kvs::Datastore;
 use surrealdb_types::{Number, Value as SurValue};
 

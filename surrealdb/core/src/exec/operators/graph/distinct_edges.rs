@@ -1,6 +1,6 @@
 //! `DistinctEdges` — per-MATCH-statement edge-uniqueness (R2 DIFFERENT EDGES).
 //!
-//! The default GQL match mode is **DIFFERENT EDGES** (`doc/opengql/V2_DESIGN.md`
+//! The default GQL match mode is **DIFFERENT EDGES** (`doc/gql/V2_DESIGN.md`
 //! R2): within one MATCH statement no edge *record* may bind twice (nodes repeat
 //! freely). This operator enforces that across a clause's edge-ish bindings —
 //! the named/hidden single edges and the group variables produced by quantified
@@ -30,11 +30,11 @@
 //! `exec/planner/match_plan.rs`. The transform is order-preserving and 1:≤1 (each
 //! input row yields at most one output row), so it propagates the input ordering.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::sync::Arc;
 

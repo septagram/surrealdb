@@ -3,8 +3,10 @@ mod auth;
 pub mod client_ip;
 pub mod error;
 pub mod export;
-#[cfg(feature = "graphql")]
+#[cfg(feature = "gql")]
 pub mod gql;
+#[cfg(feature = "graphql")]
+pub mod graphql;
 pub(crate) mod headers;
 pub mod health;
 pub mod import;
@@ -13,8 +15,6 @@ pub mod key;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod ml;
-#[cfg(feature = "opengql")]
-pub mod opengql;
 pub(crate) mod output;
 mod params;
 mod ready;
@@ -172,12 +172,12 @@ pub fn community_router(exclude: &[&str]) -> Router<Arc<RpcState>> {
 
 	#[cfg(feature = "graphql")]
 	{
-		router = router.merge(gql::router());
+		router = router.merge(graphql::router());
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	{
-		router = router.merge(opengql::router());
+		router = router.merge(gql::router());
 	}
 
 	#[cfg(feature = "mcp")]

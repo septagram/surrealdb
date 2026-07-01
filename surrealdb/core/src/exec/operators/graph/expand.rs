@@ -1,8 +1,8 @@
-//! The `Expand` operator — single-hop graph traversal for OpenGQL v2 `MATCH`.
+//! The `Expand` operator — single-hop graph traversal for GQL v2 `MATCH`.
 //!
 //! `Expand` is the workhorse of binding-table execution. Given a stream of
 //! binding rows (each a `Value::Object` keyed by binding name, per
-//! `doc/opengql/V2_DESIGN.md` §3), it expands one edge step from a bound source
+//! `doc/gql/V2_DESIGN.md` §3), it expands one edge step from a bound source
 //! node, binding the traversed edge and the reached target node into each
 //! surviving row.
 //!
@@ -71,11 +71,11 @@
 //! (`check_perms == false`) the gate is skipped and the common path remains
 //! fetch-free.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::sync::Arc;
 
@@ -101,7 +101,7 @@ use crate::val::{Object, RecordId, TableName, Value};
 /// (`In`); there is no undirected hop at the operator level. This is the
 /// operator-local mirror of the `match_plan::ExpandDirection` IR enum (the
 /// planner, which is feature-gated, translates one into the other), kept local
-/// so this operator compiles without the `opengql` feature — matching the
+/// so this operator compiles without the `gql` feature — matching the
 /// `match/fetch.rs` precedent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpandDir {

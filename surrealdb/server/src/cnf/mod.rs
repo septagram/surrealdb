@@ -46,7 +46,7 @@ pub static HTTP_MAX_SQL_BODY_SIZE: LazyLock<usize> =
 	lazy_env_parse!(bytes, "SURREAL_HTTP_MAX_SQL_BODY_SIZE", usize, 1 << 20);
 
 /// The maximum HTTP body size of the HTTP /gql endpoint (default: 1 MiB)
-#[cfg(feature = "opengql")]
+#[cfg(feature = "gql")]
 pub static HTTP_MAX_GQL_BODY_SIZE: LazyLock<usize> =
 	lazy_env_parse!(bytes, "SURREAL_HTTP_MAX_GQL_BODY_SIZE", usize, 1 << 20);
 
@@ -172,8 +172,8 @@ pub static WEBSOCKET_RESPONSE_FLUSH_PERIOD: LazyLock<u64> =
 /// How many notifications can be buffered per GraphQL subscription before
 /// backpressure drops new notifications (default: 1024)
 #[cfg(feature = "graphql")]
-pub static GQL_SUBSCRIPTION_CHANNEL_CAPACITY: LazyLock<usize> =
-	lazy_env_parse!("SURREAL_GQL_SUBSCRIPTION_CHANNEL_CAPACITY", usize, 1024);
+pub static GRAPHQL_SUBSCRIPTION_CHANNEL_CAPACITY: LazyLock<usize> =
+	lazy_env_parse!("SURREAL_GRAPHQL_SUBSCRIPTION_CHANNEL_CAPACITY", usize, 1024);
 
 /// The number of runtime worker threads to start (default: the number of CPU
 /// cores, minimum 4).

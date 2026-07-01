@@ -257,7 +257,7 @@ default = [
     "http",
     "surrealism",
     "graphql",
-    "opengql",
+    "gql",
     "mcp",
     "cli",
 ]
@@ -276,8 +276,8 @@ storage-tikv = ["surrealdb-server/storage-tikv"]
 storage-indxdb = ["surrealdb-server/storage-indxdb"]
 # GraphQL API support
 graphql = ["surrealdb-server/graphql"]
-# OpenGQL (ISO GQL) API support
-opengql = ["surrealdb-server/opengql"]
+# GQL (ISO/IEC 39075) API support
+gql = ["surrealdb-server/gql"]
 # MCP (Model Context Protocol) server support
 mcp = ["surrealdb-server/mcp"]
 # Interactive SQL CLI support

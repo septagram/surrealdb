@@ -6,7 +6,7 @@
 //! [`Bind`](crate::exec::operators::bind::Bind)s each edge record under a binding name, then
 //! stacks two `EndpointBind`s on top to recover the two endpoint nodes — the
 //! `in` endpoint and the `out` endpoint — as full node bindings. See the worked
-//! plan tree (ii) in `doc/opengql/V2_DESIGN.md` §6:
+//! plan tree (ii) in `doc/gql/V2_DESIGN.md` §6:
 //!
 //! ```text
 //! EndpointBind [edge: __e0, field: out, node: b]
@@ -50,11 +50,11 @@
 //! a `SELECT` on that table would return for the caller. A permission denial is
 //! indistinguishable from a missing record — both drop the row.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::sync::Arc;
 
@@ -71,7 +71,7 @@ use crate::val::{Object, RecordId, TableName, Value};
 /// Which endpoint of the bound edge to bind as the target node.
 ///
 /// Operator-local mirror of the edge `in`/`out` field selection; kept here so
-/// this operator compiles without the `opengql` feature — matching the
+/// this operator compiles without the `gql` feature — matching the
 /// `graph/expand.rs` precedent for [`ExpandDir`](super::expand::ExpandDir).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointField {

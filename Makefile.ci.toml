@@ -366,9 +366,9 @@ args = [
     "graphql_integration",
 ]
 
-[tasks.ci-opengql-integration]
+[tasks.ci-gql-integration]
 category = "CI - INTEGRATION TESTS"
-description = "Run OpenGQL integration tests"
+description = "Run GQL integration tests"
 command = "cargo"
 env = { RUST_BACKTRACE = 1, RUST_LOG = { value = "cli_integration::common=debug", condition = { env_not_set = [
     "RUST_LOG",
@@ -380,14 +380,14 @@ args = [
     "storage-mem",
     "--workspace",
     "--test",
-    "opengql_integration",
+    "gql_integration",
     "--",
-    "opengql_integration",
+    "gql_integration",
 ]
 
 [tasks.ci-integration-all]
 category = "CI - INTEGRATION TESTS"
-description = "Single compile: CLI, HTTP, WS, ML, GraphQL, and OpenGQL integration suites"
+description = "Single compile: CLI, HTTP, WS, ML, GraphQL, and GQL integration suites"
 command = "cargo"
 env = { RUST_BACKTRACE = 1 }
 args = [
@@ -397,7 +397,7 @@ args = [
     "--workspace",
     "--no-default-features",
     "--features",
-    "storage-mem,storage-surrealkv,http,scripting,jwks,cli,ml,graphql,opengql",
+    "storage-mem,storage-surrealkv,http,scripting,jwks,cli,ml,graphql,gql",
     "--test",
     "cli_integration",
     "--test",
@@ -409,7 +409,7 @@ args = [
     "--test",
     "graphql_integration",
     "--test",
-    "opengql_integration",
+    "gql_integration",
 ]
 
 # --------------------------------------------------
@@ -707,7 +707,7 @@ args = [
     "--locked",
     "--no-default-features",
     "--features",
-    "allocator,allocation-tracking,storage-mem,storage-rocksdb,scripting,http,jwks,surrealism,opengql",
+    "allocator,allocation-tracking,storage-mem,storage-rocksdb,scripting,http,jwks,surrealism,gql",
     "--workspace",
     "--exclude", "demo",
     "--exclude", "surrealdb-profiling",
@@ -718,7 +718,7 @@ args = [
     "--skip", "ws_integration",
     "--skip", "ml_integration",
     "--skip", "graphql_integration",
-    "--skip", "opengql_integration",
+    "--skip", "gql_integration",
     "--skip", "database_upgrade",
 ]
 
@@ -736,7 +736,7 @@ args = [
     "--locked",
     "--no-default-features",
     "--features",
-    "allocator,allocation-tracking,storage-mem,scripting,http,jwks,cli,graphql,opengql",
+    "allocator,allocation-tracking,storage-mem,scripting,http,jwks,cli,graphql,gql",
     "--workspace",
 ]
 

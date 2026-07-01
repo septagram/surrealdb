@@ -688,17 +688,17 @@ enum BenchRunResult {
 	InsufficientSamples(usize),
 }
 
-/// The executable form of a bench case: raw SurrealQL source, a lowered OpenGQL
+/// The executable form of a bench case: raw SurrealQL source, a lowered GQL
 /// plan, or a GraphQL request executed against the schema generated for the
 /// prepared datastore.
 enum BenchStatement {
 	SurrealQl,
-	/// A parsed-and-lowered OpenGQL plan. Parse + lowering happen once in
+	/// A parsed-and-lowered GQL plan. Parse + lowering happen once in
 	/// `prepare`, so the timed iterations measure plan execution only (mirroring
 	/// the GraphQL arm, which generates its schema up front). The plan is cloned
-	/// per iteration because `process_opengql` consumes it by value.
-	OpenGql {
-		plan: surrealdb_core::opengql::PreparedGqlQuery,
+	/// per iteration because `process_gql` consumes it by value.
+	Gql {
+		plan: surrealdb_core::gql::PreparedGqlQuery,
 	},
 	GraphQl {
 		schema: async_graphql::dynamic::Schema,
@@ -722,23 +722,23 @@ impl BenchStatement {
 	) -> Result<Self> {
 		match run.case.test.dialect {
 			Dialect::SurrealQl => Ok(Self::SurrealQl),
-			Dialect::OpenGql => {
+			Dialect::Gql => {
 				// Parse + lower the `.gql` source once, exactly as the run path
 				// does (see `cmd::run::run_test_with_dbs`), so the timed loop
-				// measures only `process_opengql`.
-				let settings = surrealdb_core::opengql::GqlParserSettings::default();
+				// measures only `process_gql`.
+				let settings = surrealdb_core::gql::GqlParserSettings::default();
 				let source = run.case.test.source.as_bytes();
-				let plan = surrealdb_core::opengql::parse_to_plan_with_settings(
+				let plan = surrealdb_core::gql::parse_to_plan_with_settings(
 					&run.case.test.source,
 					settings,
 				)
 				.map_err(|e| {
 					anyhow!(
-						"Failed to parse/lower OpenGQL bench statement: {}",
+						"Failed to parse/lower GQL bench statement: {}",
 						e.render_on_bytes(source)
 					)
 				})?;
-				Ok(Self::OpenGql {
+				Ok(Self::Gql {
 					plan,
 				})
 			}
@@ -770,12 +770,12 @@ impl BenchStatement {
 			Self::SurrealQl => {
 				let _ = dbs.execute(&run.case.test.source, session, None).await?;
 			}
-			Self::OpenGql {
+			Self::Gql {
 				plan,
 			} => {
-				// `process_opengql` takes the plan by value, so each iteration
+				// `process_gql` takes the plan by value, so each iteration
 				// executes a fresh clone of the once-lowered plan.
-				let _ = dbs.process_opengql(plan.clone(), session, None).await?;
+				let _ = dbs.process_gql(plan.clone(), session, None).await?;
 			}
 			Self::GraphQl {
 				schema,

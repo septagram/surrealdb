@@ -1,12 +1,12 @@
 //! The `PathExpand` operator — variable-length / quantified graph traversal
-//! for OpenGQL v2 `MATCH`.
+//! for GQL v2 `MATCH`.
 //!
 //! `PathExpand` implements the quantified edge step of a lowered
 //! [`MatchPlan`](crate::expr::match_plan::MatchPlan): patterns such as
 //! `(a)-[:knows]->{1,3}(b)`, `(a)-[:knows]->+(b)`, or `(a)-[:knows]->*(b)`. For
 //! every input binding row it walks the graph from a bound *source* node,
 //! enumerating one output row **per path** (rule R6 of
-//! `doc/opengql/V2_DESIGN.md` §0) at every depth in `[min, max]` whose terminal
+//! `doc/gql/V2_DESIGN.md` §0) at every depth in `[min, max]` whose terminal
 //! node passes the `target_label` filter.
 //!
 //! ## Binding rows produced
@@ -73,11 +73,11 @@
 //! Within one source row this yields a pre-order DFS: a node at depth `d` is
 //! emitted before the deeper paths that extend through it.
 
-// The OpenGQL v2 MATCH operators are constructed only by the opengql-gated
-// planner (`Expr::Match` is `#[cfg(feature = "opengql")]`), so they are dead
+// The GQL v2 MATCH operators are constructed only by the gql-gated
+// planner (`Expr::Match` is `#[cfg(feature = "gql")]`), so they are dead
 // code when the feature is off — suppress the lint there only, keeping
-// dead-code detection active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// dead-code detection active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::sync::Arc;
 

@@ -55,7 +55,7 @@ cargo make bench -- scans/where_integer_in_many_full --profile --dataset indexed
 
 ### Language Tests (`language-tests/tests/*.surql`, `*.gql`)
 
-Test SurrealQL queries with expected results (`.gql` files test the OpenGQL dialect). Bug reproductions go in `language-tests/tests/reproductions/ISSUE_NUMBER_description.surql`.
+Test SurrealQL queries with expected results (`.gql` files test the GQL dialect). Bug reproductions go in `language-tests/tests/reproductions/ISSUE_NUMBER_description.surql`.
 
 **Test file format:**
 ```surql

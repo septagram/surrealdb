@@ -307,8 +307,8 @@ Flag when changes touch:
 - WebSocket upgrade handlers, buffer-size or message-limit config
 - `client_ip` module (header sources, proxy validation)
 - GraphQL service, schema construction, or executor configuration
-- The `/gql` OpenGQL endpoint (`ntw/opengql.rs`: route, body-size limit, and the
-  `RouteTarget::Gql` / `ExperimentalTarget::OpenGql` capability gates)
+- The `/gql` GQL endpoint (`ntw/gql.rs`: route, body-size limit, and the
+  `RouteTarget::Gql` / `ExperimentalTarget::Gql` capability gates)
 - Error formatting or `ResponseError` implementation
 - Authentication middleware (which endpoints are gated)
 - Body-size limit constants or `RequestBodyLimitLayer` application
@@ -351,8 +351,8 @@ Flag when changes touch:
 - CBOR deserialization path, JSON parsing, or FlatBuffers decoding
 - WebSocket serve/read/handle_message functions
 - RPC dispatch table (new methods, modified signatures)
-- The `gql` RPC method (OpenGQL: must keep `allows_query_by_subject` and the
-  `ExperimentalTarget::OpenGql` gate in `Datastore::parse_opengql`)
+- The `gql` RPC method (GQL: must keep `allows_query_by_subject` and the
+  `ExperimentalTarget::Gql` gate in `Datastore::parse_gql`)
 - Transaction methods (begin/commit/cancel) or transaction map
 - Notification routing or LiveQueries map structure
 - HTTP RPC handler session management
@@ -533,8 +533,8 @@ Surrealism/WASM
   `DEFINE FUNCTION` / `DEFINE API` body), and the dedicated eval subject gate
   (`Capabilities::allows_eval_query`, `EvalQueryTarget`), which defaults to denied
   for every subject even under `Capabilities::all()` / `--allow-all`. `eval::gql`
-  additionally inherits the `opengql` experimental gate via
-  `opengql::parse_with_capabilities`.
+  additionally inherits the `gql` experimental gate via
+  `gql::parse_with_capabilities`.
 - The eval subject must be derived from the *current execution* auth. This is
   safe because `Auth::new_limited` (the auth-limiting applied to user-defined
   function bodies) never raises the subject class — a record/guest caller is
@@ -659,7 +659,7 @@ Flag when changes touch:
 
 ## 15. Query Parser
 
-**Files**: `syn/`, `sql/`, `opengql/`, parser entry points, expression construction
+**Files**: `syn/`, `sql/`, `gql/`, parser entry points, expression construction
 
 ### Invariants
 
@@ -684,23 +684,23 @@ Flag when changes touch:
 - Parser buffer management or allocation strategy
 - Entry points that accept untrusted input strings
 - AST node construction for security-relevant statements (DEFINE, OPTION, USE)
-- The OpenGQL front-end (`opengql/` parsing and lowering, the `gql` RPC method,
+- The GQL front-end (`gql/` parsing and lowering, the `gql` RPC method,
   the `/gql` HTTP route)
 
 ---
 
-## 15a. OpenGQL (experimental ISO GQL surface)
+## 15a. GQL (experimental ISO GQL surface)
 
-**Files**: `opengql/` (lexer, parser, `lower/`), `expr/match_plan.rs`,
+**Files**: `gql/` (lexer, parser, `lower/`), `expr/match_plan.rs`,
 the binding-table operators — `exec/operators/graph/` (`expand.rs`, `endpoint.rs`,
 `path_expand.rs`, `distinct_edges.rs`), `exec/operators/join/hash_join.rs`,
 `exec/operators/{bind.rs, distinct.rs}`, and the FieldState-aware fetch helper
 `exec/operators/scan/fetch.rs` —
-`exec/planner/match_plan.rs`, `kvs/ds.rs` (`parse_opengql` / `process_opengql` /
-`execute_opengql`), `rpc/protocol.rs` (`gql` method, `QueryForm::Plan`),
-`ntw/opengql.rs` (`/gql` route)
+`exec/planner/match_plan.rs`, `kvs/ds.rs` (`parse_gql` / `process_gql` /
+`execute_gql`), `rpc/protocol.rs` (`gql` method, `QueryForm::Plan`),
+`ntw/gql.rs` (`/gql` route)
 
-OpenGQL is a second query language lowered to a `MatchPlan` IR and executed by
+GQL is a second query language lowered to a `MatchPlan` IR and executed by
 the streaming engine. The lowering constructs only a single top-level
 `Expr::Match` (never any other `Expr`, and never a `sql::Ast`). It supports reads
 (`MATCH … RETURN`) and the four ISO data-modifying statements (`INSERT`, `SET`,
@@ -722,9 +722,9 @@ invariants.
   — it applies only the table-level permission and skips the field-level
   machinery, which would leak restricted fields into binding rows.
 - **Layered gate chain.** Reaching the GQL executor must require, in order: the
-  `opengql` cargo feature compiled in; for HTTP, the `RouteTarget::Gql` capability
-  on the `/gql` route; the `ExperimentalTarget::OpenGql` experimental capability
-  (checked in `Datastore::parse_opengql` *and* `opengql::parse_with_capabilities`
+  `gql` cargo feature compiled in; for HTTP, the `RouteTarget::Gql` capability
+  on the `/gql` route; the `ExperimentalTarget::Gql` experimental capability
+  (checked in `Datastore::parse_gql` *and* `gql::parse_with_capabilities`
   — the language gates itself, not relying on the caller); `allows_query_by_subject`
   for the session's auth subject (the `gql` RPC method); and a valid, non-anonymous
   session under the namespace/database authorization context. Removing or
@@ -802,9 +802,9 @@ Flag when changes touch:
 - `exec/operators/scan/fetch.rs` or any binding-fetch call site (a switch to
   `resolve_record_batch`, or a new fetch path that bypasses FieldState, is a
   field-permission leak)
-- The gate chain: `ExperimentalTarget::OpenGql`, `RouteTarget::Gql`,
+- The gate chain: `ExperimentalTarget::Gql`, `RouteTarget::Gql`,
   `allows_query_by_subject` in the `gql` RPC method, or the experimental check in
-  `Datastore::parse_opengql`
+  `Datastore::parse_gql`
 - `SURREAL_GQL_MAX_PATH_ROWS` / `SURREAL_GQL_MAX_JOIN_BUILD_ROWS` /
   `SURREAL_GQL_MAX_OUTPUT_ROWS` defaults or their enforcement in `PathExpand` /
   `HashJoin` / `Expand` / `Distinct`, or removal of a `ctx.cancellation()` poll
@@ -824,7 +824,7 @@ Flag when changes touch:
 - The mutation pipeline: `exec/operators/mutate.rs` (a write that bypasses
   `legacy_compute`, a dropped pipeline-breaker drain, a re-bound RETURN image that
   is not permission-filtered, or a `NODETACH` path that skips the edge probe),
-  `opengql/lower/mutation.rs` (a dropped rejection — label mutation, group/path or
+  `gql/lower/mutation.rs` (a dropped rejection — label mutation, group/path or
   unbound target, reserved `id`/`in`/`out` keys), and `Expr::Match` `read_only()`
   in `expr/expression.rs` (a mutation plan that reports read-only would run in a
   read transaction)

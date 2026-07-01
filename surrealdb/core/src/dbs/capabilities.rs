@@ -123,7 +123,7 @@ impl std::str::FromStr for FuncTarget {
 pub enum ExperimentalTarget {
 	Files,
 	Surrealism,
-	OpenGql,
+	Gql,
 }
 
 impl fmt::Display for ExperimentalTarget {
@@ -131,7 +131,7 @@ impl fmt::Display for ExperimentalTarget {
 		match self {
 			Self::Files => write!(f, "files"),
 			Self::Surrealism => write!(f, "surrealism"),
-			Self::OpenGql => write!(f, "opengql"),
+			Self::Gql => write!(f, "gql"),
 		}
 	}
 }
@@ -147,7 +147,7 @@ impl Target<str> for ExperimentalTarget {
 		match self {
 			Self::Files => elem.eq_ignore_ascii_case("files"),
 			Self::Surrealism => elem.eq_ignore_ascii_case("surrealism"),
-			Self::OpenGql => elem.eq_ignore_ascii_case("opengql"),
+			Self::Gql => elem.eq_ignore_ascii_case("gql"),
 		}
 	}
 }
@@ -175,7 +175,7 @@ impl std::str::FromStr for ExperimentalTarget {
 		match s.trim().to_ascii_lowercase().as_str() {
 			"files" => Ok(ExperimentalTarget::Files),
 			"surrealism" => Ok(ExperimentalTarget::Surrealism),
-			"opengql" => Ok(ExperimentalTarget::OpenGql),
+			"gql" => Ok(ExperimentalTarget::Gql),
 			_ => Err(ParseExperimentalTargetError::InvalidName),
 		}
 	}
@@ -1094,21 +1094,22 @@ mod tests {
 			ExperimentalTarget::from_str("surrealism").unwrap(),
 			ExperimentalTarget::Surrealism
 		);
-		assert_eq!(ExperimentalTarget::from_str("opengql").unwrap(), ExperimentalTarget::OpenGql);
-		assert_eq!(ExperimentalTarget::from_str("OpenGQL").unwrap(), ExperimentalTarget::OpenGql);
-		ExperimentalTarget::from_str("open_gql").unwrap_err();
+		assert_eq!(ExperimentalTarget::from_str("gql").unwrap(), ExperimentalTarget::Gql);
+		assert_eq!(ExperimentalTarget::from_str("GQL").unwrap(), ExperimentalTarget::Gql);
+		// The retired `opengql` spelling must no longer parse.
+		ExperimentalTarget::from_str("opengql").unwrap_err();
 		ExperimentalTarget::from_str("").unwrap_err();
 
-		assert_eq!(ExperimentalTarget::OpenGql.to_string(), "opengql");
+		assert_eq!(ExperimentalTarget::Gql.to_string(), "gql");
 		assert_eq!(
-			ExperimentalTarget::from_str(&ExperimentalTarget::OpenGql.to_string()).unwrap(),
-			ExperimentalTarget::OpenGql
+			ExperimentalTarget::from_str(&ExperimentalTarget::Gql.to_string()).unwrap(),
+			ExperimentalTarget::Gql
 		);
 
-		assert!(ExperimentalTarget::OpenGql.matches("opengql"));
-		assert!(ExperimentalTarget::OpenGql.matches("OPENGQL"));
-		assert!(!ExperimentalTarget::OpenGql.matches("files"));
-		assert!(!ExperimentalTarget::Files.matches("opengql"));
+		assert!(ExperimentalTarget::Gql.matches("gql"));
+		assert!(ExperimentalTarget::Gql.matches("GQL"));
+		assert!(!ExperimentalTarget::Gql.matches("files"));
+		assert!(!ExperimentalTarget::Files.matches("gql"));
 	}
 
 	#[test]

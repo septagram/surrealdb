@@ -1,8 +1,8 @@
-//! Planning for OpenGQL v2 `MATCH` queries.
+//! Planning for GQL v2 `MATCH` queries.
 //!
 //! [`Planner::plan_match`] compiles a [`MatchPlan`] (the language-neutral
 //! binding-table IR produced by the GQL lowering, `expr/match_plan.rs`) into a
-//! tree of streaming operators. See `doc/opengql/V2_DESIGN.md` §6 for the
+//! tree of streaming operators. See `doc/gql/V2_DESIGN.md` §6 for the
 //! normative algorithm and the worked plan trees this module pins as EXPLAIN
 //! snapshots.
 //!

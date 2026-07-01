@@ -1,6 +1,6 @@
 //! FieldState-aware batch record resolution for GQL MATCH binding fetches.
 //!
-//! This is the security foundation for OpenGQL v2 binding rows. Every node /
+//! This is the security foundation for GQL v2 binding rows. Every node /
 //! edge binding that names a *fetched* record (Expand targets and edges,
 //! EndpointBind nodes, PathExpand intermediate + terminal nodes and edges) is
 //! resolved through [`resolve_with_field_state`], guaranteeing that the
@@ -26,12 +26,12 @@
 //! the entire FieldState machinery (computed fields + field-level permissions),
 //! which would leak restricted fields into binding rows.
 
-// This FieldState-aware fetch helper is used only by the OpenGQL v2 MATCH
-// operators, which are constructed only by the opengql-gated planner
-// (`Expr::Match` is `#[cfg(feature = "opengql")]`), so it is dead code when the
+// This FieldState-aware fetch helper is used only by the GQL v2 MATCH
+// operators, which are constructed only by the gql-gated planner
+// (`Expr::Match` is `#[cfg(feature = "gql")]`), so it is dead code when the
 // feature is off — suppress the lint there only, keeping dead-code detection
-// active in the default (opengql-on) build.
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+// active in the default (gql-on) build.
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -270,7 +270,7 @@ mod tests {
 	// The cache is a plain owned struct; verify it constructs and resolves
 	// `check_perms` lazily without a datastore for the trivial paths. The
 	// full permission/computed-field behavior is exercised by the language
-	// tests over the streaming engine (graph/lookup + opengql corpora).
+	// tests over the streaming engine (graph/lookup + gql corpora).
 
 	#[test]
 	fn empty_cache_starts_uninitialised() {

@@ -1,4 +1,4 @@
-//! The `ShortestPathExpand` operator — shortest-path search for OpenGQL v2
+//! The `ShortestPathExpand` operator — shortest-path search for GQL v2
 //! `MATCH` (the `ALL SHORTEST` / `ANY SHORTEST` / `SHORTEST k` / `SHORTEST k
 //! GROUP(S)` path-search prefixes).
 //!
@@ -54,7 +54,7 @@
 //! per-source `SURREAL_GQL_MAX_PATH_ROWS` budget, which counts every frontier
 //! push and every emit.
 
-#![cfg_attr(not(feature = "opengql"), allow(dead_code))]
+#![cfg_attr(not(feature = "gql"), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;

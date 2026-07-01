@@ -179,7 +179,7 @@ mod tests {
 		assert_eq!(Method::parse_case_insensitive("GraphQL"), Method::Graphql);
 		assert_eq!(Method::Graphql.to_str(), "graphql");
 		assert!(Method::Graphql.is_valid());
-		// `gql` (OpenGQL) and `graphql` are distinct methods.
+		// `gql` (GQL) and `graphql` are distinct methods.
 		assert_ne!(Method::Gql, Method::Graphql);
 	}
 }

@@ -63,15 +63,15 @@ impl McpSession {
 		self.execute_with_session(&session, query, vars).await
 	}
 
-	/// Execute an OpenGQL (ISO GQL) query with optional typed variable
+	/// Execute a GQL (ISO/IEC 39075) query with optional typed variable
 	/// bindings, against the namespace and database selected on the session.
 	///
 	/// Mirrors [`Self::execute`]: the query capability is checked for the
 	/// subject and top-level failures are returned in-band as error
-	/// [`QueryResult`]s. OpenGQL is an experimental capability; when it is not
+	/// [`QueryResult`]s. GQL is an experimental capability; when it is not
 	/// enabled the datastore returns that as the (in-band) error here, so the
 	/// `gql` tool degrades to a clear message rather than disappearing.
-	pub async fn execute_opengql(
+	pub async fn execute_gql(
 		&self,
 		query: &str,
 		vars: Option<Variables>,
@@ -84,7 +84,7 @@ impl McpSession {
 			);
 			return Ok(vec![QueryResultBuilder::started_now().finish_with_result(Err(err))]);
 		}
-		self.run_to_results(self.ds.execute_opengql(query, &session, vars)).await
+		self.run_to_results(self.ds.execute_gql(query, &session, vars)).await
 	}
 
 	/// Execute a GraphQL request against the namespace and database selected on
@@ -108,7 +108,7 @@ impl McpSession {
 		if !self.ds.allows_query_by_subject(session.au.as_ref()) {
 			return Err("Capabilities denied this query for the current subject".to_string());
 		}
-		let fut = surrealdb_core::gql::execute_request(
+		let fut = surrealdb_core::graphql::execute_request(
 			&self.ds,
 			&session,
 			query.to_string(),
@@ -177,7 +177,7 @@ impl McpSession {
 	/// Run a datastore query future under the configured
 	/// [`McpConfig::query_timeout`], normalising both a timeout and a top-level
 	/// execution failure into an in-band error [`QueryResult`]. Shared by the
-	/// SurrealQL ([`Self::execute`]) and OpenGQL ([`Self::execute_opengql`])
+	/// SurrealQL ([`Self::execute`]) and GQL ([`Self::execute_gql`])
 	/// paths, which differ only in which datastore entrypoint produces `fut`.
 	async fn run_to_results<F>(&self, fut: F) -> Result<Vec<QueryResult>, Error>
 	where

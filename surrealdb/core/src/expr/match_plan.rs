@@ -1,11 +1,11 @@
-//! The declarative IR for OpenGQL v2 `MATCH` queries.
+//! The declarative IR for GQL v2 `MATCH` queries.
 //!
 //! `MatchPlan` is the language-neutral binding-table plan node produced by the
 //! GQL lowering and embedded into the logical plan as [`Expr::Match`]. The
 //! streaming execution planner (`exec/planner/match_plan.rs`) compiles it into a
 //! tree of physical operators; it never runs under the compute-only planner.
 //!
-//! See `doc/opengql/V2_DESIGN.md` §2 for the normative contract.
+//! See `doc/gql/V2_DESIGN.md` §2 for the normative contract.
 
 use surrealdb_types::{SqlFormat, ToSql};
 
@@ -236,7 +236,7 @@ pub(crate) struct EdgeQuantifier {
 	pub(crate) max: Option<u32>,
 }
 
-/// The lowered path-search prefix of a [`PatternPlan`] (`doc/opengql/V2_DESIGN.md`).
+/// The lowered path-search prefix of a [`PatternPlan`] (`doc/gql/V2_DESIGN.md`).
 /// `None` on the pattern means no prefix was written (the default: every path,
 /// edge-unique `WALK`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

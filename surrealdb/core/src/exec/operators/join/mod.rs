@@ -2,9 +2,9 @@
 //!
 //! These operators combine two binding-row streams (`Value::Object`s keyed by
 //! binding name — the binding-row convention, see
-//! `doc/opengql/V2_DESIGN.md` §3) and are deliberately language-neutral: they
+//! `doc/gql/V2_DESIGN.md` §3) and are deliberately language-neutral: they
 //! carry no GQL IR types and can be driven by any frontend that produces
-//! binding rows. Today the only consumer is the OpenGQL planner
+//! binding rows. Today the only consumer is the GQL planner
 //! (`exec/planner/match_plan.rs`); when SurrealQL/Postgres relational joins
 //! land, this module is their shared home.
 //!
@@ -16,7 +16,7 @@
 //! ## Extension point: generalized join keys
 //!
 //! [`HashJoin`](hash_join::HashJoin) keys on `Vec<String>` binding names and
-//! extracts `<binding>.id` from each side — the only key shape OpenGQL needs
+//! extracts `<binding>.id` from each side — the only key shape GQL needs
 //! (joins are always equi-joins on shared node ids). A relational SQL planner
 //! needs arbitrary, asymmetric equi-join conditions; generalizing the key
 //! representation to a composite `Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>`

@@ -737,9 +737,9 @@ impl McpService {
 	}
 
 	#[tool(
-		description = "Execute an OpenGQL (ISO GQL) query with optional parameter bindings, e.g. `MATCH (p:person) RETURN p.name AS name`. OpenGQL is an experimental capability that must be enabled on the server (`--allow-experimental opengql`); otherwise the call returns a capability error.",
+		description = "Execute a GQL (ISO/IEC 39075) query with optional parameter bindings, e.g. `MATCH (p:person) RETURN p.name AS name`. GQL is an experimental capability that must be enabled on the server (`--allow-experimental gql`); otherwise the call returns a capability error.",
 		annotations(
-			title = "Run OpenGQL",
+			title = "Run GQL",
 			read_only_hint = true,
 			destructive_hint = false,
 			idempotent_hint = true,

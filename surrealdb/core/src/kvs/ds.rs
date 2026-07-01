@@ -63,6 +63,8 @@ use crate::exec::function::FunctionRegistry;
 use crate::expr::model::get_model_path;
 use crate::expr::statements::{DefineModelStatement, DefineStatement, DefineUserStatement};
 use crate::expr::{Base, Expr, FlowResultExt as _, Literal, LogicalPlan, TopLevelExpr};
+#[cfg(feature = "gql")]
+use crate::gql::PreparedGqlQuery;
 #[cfg(feature = "http")]
 use crate::http::HttpClient;
 use crate::iam::{Action, Auth, Error as IamError, Resource, ResourceKind, Role};
@@ -91,8 +93,6 @@ use crate::kvs::{
 };
 use crate::lq::LiveQueryRouter;
 use crate::observe::{ExecutionObserver, NoopObserver};
-#[cfg(feature = "opengql")]
-use crate::opengql::PreparedGqlQuery;
 use crate::sql::Ast;
 #[cfg(feature = "surrealism")]
 use crate::surrealism::cache::SurrealismCache;
@@ -246,7 +246,7 @@ pub struct Datastore {
 	/// Keyed by `(ns, db, config, schema-fingerprint)` so DDL changes invalidate
 	/// it automatically.
 	#[cfg(all(feature = "graphql", not(target_family = "wasm")))]
-	gql_schema_cache: crate::gql::cache::GraphQLSchemaCache,
+	graphql_schema_cache: crate::graphql::cache::GraphQLSchemaCache,
 	/// Registry of built-in scalar, aggregate, projection and index
 	/// functions, along with the method-dispatch table. Built once when the
 	/// datastore is constructed and shared across all transactions via the
@@ -999,7 +999,7 @@ impl Datastore {
 			temporary_directory: self.temporary_directory,
 			cache: Arc::new(DatastoreCache::new(self.config.datastore_cache_size)),
 			#[cfg(all(feature = "graphql", not(target_family = "wasm")))]
-			gql_schema_cache: crate::gql::cache::GraphQLSchemaCache::default(),
+			graphql_schema_cache: crate::graphql::cache::GraphQLSchemaCache::default(),
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets: self.buckets,
 			sequences: Sequences::new(self.transaction_factory.clone(), self.id),
@@ -1049,7 +1049,7 @@ impl Datastore {
 			temporary_directory: self.temporary_directory.clone(),
 			cache: Arc::new(DatastoreCache::new(self.config.datastore_cache_size)),
 			#[cfg(all(feature = "graphql", not(target_family = "wasm")))]
-			gql_schema_cache: crate::gql::cache::GraphQLSchemaCache::default(),
+			graphql_schema_cache: crate::graphql::cache::GraphQLSchemaCache::default(),
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets: self.buckets.clone(),
 			sequences: Sequences::new(transaction_factory.clone(), id),
@@ -3335,41 +3335,38 @@ impl Datastore {
 	}
 
 	/// Parse and lower a GQL query into a [`PreparedGqlQuery`], checking that
-	/// the `opengql` experimental capability is enabled.
-	#[cfg(feature = "opengql")]
-	pub(crate) fn parse_opengql(
-		&self,
-		txt: &str,
-	) -> std::result::Result<PreparedGqlQuery, TypesError> {
-		// Check if the experimental OpenGQL capability is enabled. The
+	/// the `gql` experimental capability is enabled.
+	#[cfg(feature = "gql")]
+	pub(crate) fn parse_gql(&self, txt: &str) -> std::result::Result<PreparedGqlQuery, TypesError> {
+		// Check if the experimental GQL capability is enabled. The
 		// wording deliberately matches the existing experimental-gate errors
 		// (`surrealism`, `files`) rather than naming the server's
 		// `--allow-experimental` flag: core is also used embedded, where the
 		// capability is enabled programmatically and no CLI flag exists.
-		if !self.capabilities.allows_experimental(&ExperimentalTarget::OpenGql) {
+		if !self.capabilities.allows_experimental(&ExperimentalTarget::Gql) {
 			return Err(TypesError::not_allowed(
-				"Experimental capability `opengql` is not enabled".to_string(),
+				"Experimental capability `gql` is not enabled".to_string(),
 				None,
 			));
 		}
 		// Parse and lower the GQL query text
-		crate::opengql::parse_with_capabilities(txt, &self.capabilities, &self.config)
+		crate::gql::parse_with_capabilities(txt, &self.capabilities, &self.config)
 			.map_err(|e| TypesError::validation(e.to_string(), None))
 	}
 
 	/// Parse and execute a GQL query
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[instrument(level = "debug", target = "surrealdb::core::kvs::ds", skip_all)]
-	pub async fn execute_opengql(
+	pub async fn execute_gql(
 		&self,
 		txt: &str,
 		sess: &Session,
 		vars: Option<PublicVariables>,
 	) -> std::result::Result<Vec<QueryResult>, TypesError> {
 		// Parse and lower the GQL query text
-		let plan = self.parse_opengql(txt)?;
+		let plan = self.parse_gql(txt)?;
 		// Process the lowered plan
-		self.process_opengql(plan, sess, vars).await
+		self.process_gql(plan, sess, vars).await
 	}
 
 	/// Execute a pre-lowered GQL query.
@@ -3377,9 +3374,9 @@ impl Datastore {
 	/// Mirrors [`Self::process`] for the GQL dialect: the
 	/// [`PreparedGqlQuery`] already wraps a [`LogicalPlan`], so it is handed
 	/// directly to the shared plan-level executor.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[instrument(level = "debug", target = "surrealdb::core::kvs::ds", skip_all)]
-	pub async fn process_opengql(
+	pub async fn process_gql(
 		&self,
 		q: PreparedGqlQuery,
 		sess: &Session,
@@ -3391,9 +3388,9 @@ impl Datastore {
 	/// Execute a pre-lowered GQL query with an externally-owned cancellation
 	/// handle. See [`Self::process_with_transaction_and_cancel`] for the
 	/// cancellation semantics.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[instrument(level = "debug", target = "surrealdb::core::kvs::ds", skip_all)]
-	pub(crate) async fn process_opengql_with_cancel(
+	pub(crate) async fn process_gql_with_cancel(
 		&self,
 		q: PreparedGqlQuery,
 		sess: &Session,
@@ -3404,9 +3401,9 @@ impl Datastore {
 	}
 
 	/// Execute a pre-lowered GQL query with an existing transaction.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[instrument(level = "debug", target = "surrealdb::core::kvs::ds", skip_all)]
-	pub(crate) async fn process_opengql_with_transaction(
+	pub(crate) async fn process_gql_with_transaction(
 		&self,
 		q: PreparedGqlQuery,
 		sess: &Session,
@@ -3420,9 +3417,9 @@ impl Datastore {
 	/// externally-owned cancellation handle. See
 	/// [`Self::process_with_transaction_and_cancel`] for the cancellation
 	/// semantics.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[instrument(level = "debug", target = "surrealdb::core::kvs::ds", skip_all)]
-	pub(crate) async fn process_opengql_with_transaction_and_cancel(
+	pub(crate) async fn process_gql_with_transaction_and_cancel(
 		&self,
 		q: PreparedGqlQuery,
 		sess: &Session,
@@ -3540,7 +3537,7 @@ impl Datastore {
 
 	/// Shared body for [`Self::process_with_transaction`],
 	/// [`Self::process_with_transaction_and_cancel`] and the GQL
-	/// `process_opengql` variants. The public Ast variants exist to keep the
+	/// `process_gql` variants. The public Ast variants exist to keep the
 	/// non-cancel API stable for SDK / embedded callers; `cancel: None`
 	/// reproduces the pre-cancellation behaviour exactly.
 	async fn process_plan_with_transaction_inner(
@@ -4294,8 +4291,8 @@ impl Datastore {
 	pub async fn graphql_schema(
 		self: &Arc<Self>,
 		session: &Session,
-	) -> Result<async_graphql::dynamic::Schema, crate::gql::GqlError> {
-		self.gql_schema_cache.get_schema(self, session).await
+	) -> Result<async_graphql::dynamic::Schema, crate::graphql::GraphqlError> {
+		self.graphql_schema_cache.get_schema(self, session).await
 	}
 
 	#[cfg(feature = "http")]
@@ -4391,22 +4388,22 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
-	async fn execute_opengql_requires_experimental_capability() -> Result<()> {
+	async fn execute_gql_requires_experimental_capability() -> Result<()> {
 		let ds = Datastore::new("memory").await?;
 		let ses = Session::owner().with_ns("test").with_db("test");
-		let err = ds.execute_opengql("MATCH (n:person) RETURN n", &ses, None).await.unwrap_err();
+		let err = ds.execute_gql("MATCH (n:person) RETURN n", &ses, None).await.unwrap_err();
 		assert!(
-			err.to_string().contains("Experimental capability `opengql` is not enabled"),
+			err.to_string().contains("Experimental capability `gql` is not enabled"),
 			"unexpected error: {err}"
 		);
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
-	async fn execute_opengql_parses_lowers_and_executes() -> Result<()> {
+	async fn execute_gql_parses_lowers_and_executes() -> Result<()> {
 		use crate::dbs::capabilities::Targets;
 		let ds = Datastore::builder()
 			.with_capabilities(Capabilities::all().with_experimental(Targets::All))
@@ -4419,22 +4416,21 @@ mod test {
 		execute_all(&ds, &ses, "CREATE person:tobie SET name = 'Tobie';").await?;
 		// A valid GQL query parses, lowers, and executes through the
 		// SurrealQL pipeline
-		let mut res =
-			ds.execute_opengql("MATCH (n:person) RETURN n.name AS name", &ses, None).await?;
+		let mut res = ds.execute_gql("MATCH (n:person) RETURN n.name AS name", &ses, None).await?;
 		assert_eq!(res.len(), 1);
 		let val = res.remove(0).result?;
 		assert_eq!(val, PublicValue::Array(surrealdb_types::array![object! { name: "Tobie" }]));
 		// An invalid GQL query reports a parse error rather than a
 		// capability error
-		let err = ds.execute_opengql("MATCH RETURN", &ses, None).await.unwrap_err();
+		let err = ds.execute_gql("MATCH RETURN", &ses, None).await.unwrap_err();
 		assert!(!err.to_string().contains("experimental"), "unexpected error: {err}");
 		Ok(())
 	}
 
-	/// A datastore with the `opengql` capability and an initialised `test/test`
+	/// A datastore with the `gql` capability and an initialised `test/test`
 	/// namespace/database, for the GQL mutation tests.
-	#[cfg(feature = "opengql")]
-	async fn opengql_test_ds() -> Result<(Datastore, Session)> {
+	#[cfg(feature = "gql")]
+	async fn gql_test_ds() -> Result<(Datastore, Session)> {
 		use crate::dbs::capabilities::Targets;
 		let ds = Datastore::builder()
 			.with_capabilities(Capabilities::all().with_experimental(Targets::All))
@@ -4448,18 +4444,18 @@ mod test {
 	}
 
 	/// Run one GQL query, asserting a single statement result, and return it.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	async fn run_gql(ds: &Datastore, ses: &Session, query: &str) -> Result<PublicValue> {
-		let mut res = ds.execute_opengql(query, ses, None).await?;
+		let mut res = ds.execute_gql(query, ses, None).await?;
 		assert_eq!(res.len(), 1, "expected one result for {query:?}");
 		Ok(res.remove(0).result?)
 	}
 
 	/// Run one GQL query expecting failure (parse/lowering rejection or a
 	/// per-statement execution error), returning the rendered error.
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	async fn run_gql_err(ds: &Datastore, ses: &Session, query: &str) -> String {
-		match ds.execute_opengql(query, ses, None).await {
+		match ds.execute_gql(query, ses, None).await {
 			Ok(mut res) => match res.remove(0).result {
 				Ok(value) => panic!("expected {query:?} to fail, got {value:?}"),
 				Err(e) => e.to_string(),
@@ -4468,10 +4464,10 @@ mod test {
 		}
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_set_updates_and_returns_after_image() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30;").await?;
 		// SET returns the post-mutation value.
 		let val = run_gql(
@@ -4487,10 +4483,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_remove_unsets_field_and_returns_empty() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30;").await?;
 		// A mutation-only query returns an empty array.
 		let val = run_gql(&ds, &ses, "MATCH (n:person) REMOVE n.age").await?;
@@ -4505,10 +4501,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_delete_nodetach_errors_with_edges_then_detach_succeeds() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(
 			&ds,
 			&ses,
@@ -4542,10 +4538,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_insert_node_and_edge() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		// A leading INSERT (no MATCH) creates a node exactly once.
 		let val = run_gql(&ds, &ses, "INSERT (p:person {name: 'A'})").await?;
 		assert_eq!(val, PublicValue::Array(surrealdb_types::array![]));
@@ -4577,20 +4573,20 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_label_mutation_rejected() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A';").await?;
 		let err = run_gql_err(&ds, &ses, "MATCH (n:person) SET n:Archived").await;
 		assert!(err.contains("Label mutation is not supported"), "{err}");
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_set_all_properties_replaces_and_multi_item() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 30, city = 'L';").await?;
 		// `SET n = {…}` replaces ALL user properties (age is dropped).
 		let val = run_gql(
@@ -4618,10 +4614,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_multi_statement_set_last_wins() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 1;").await?;
 		// Two SET statements in one query: the second sees the first's write.
 		let val = run_gql(
@@ -4634,10 +4630,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_edge_set_remove_delete() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(
 			&ds,
 			&ses,
@@ -4662,10 +4658,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_fanout_set_is_consistent_per_row() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(
 			&ds,
 			&ses,
@@ -4693,10 +4689,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_detach_delete_nulls_cascaded_edge_binding() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(
 			&ds,
 			&ses,
@@ -4724,10 +4720,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_insert_left_edge_chain_and_repeated_anon() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
 			.await?;
 		// A left-pointing INSERT edge relates b -> a.
@@ -4775,10 +4771,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_mutation_rejection_ledger() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		// Each lowers (or parses) to a precise rejection. No data needed — these
 		// fail before execution.
 		let cases: &[(&str, &str)] = &[
@@ -4809,10 +4805,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_mutation_respects_record_permissions() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		// Owner: a table that denies create/update (but allows select), seeded
 		// with one row.
 		execute_all(
@@ -4833,9 +4829,9 @@ mod test {
 		);
 		// Each write goes through the native document pipeline, so each is denied:
 		// INSERT (create), SET (update), DELETE (delete) all leave the row intact.
-		let _ = ds.execute_opengql("INSERT (p:person {name: 'B'})", &rec, None).await;
-		let _ = ds.execute_opengql("MATCH (n:person) SET n.age = 99", &rec, None).await;
-		let _ = ds.execute_opengql("MATCH (n:person) DETACH DELETE n", &rec, None).await;
+		let _ = ds.execute_gql("INSERT (p:person {name: 'B'})", &rec, None).await;
+		let _ = ds.execute_gql("MATCH (n:person) SET n.age = 99", &rec, None).await;
+		let _ = ds.execute_gql("MATCH (n:person) DETACH DELETE n", &rec, None).await;
 		// As owner: exactly the original row remains, unchanged.
 		let val =
 			run_gql(&ds, &ses, "MATCH (n:person) RETURN n.name AS name, n.age AS age").await?;
@@ -4846,10 +4842,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_nodetach_probe_ignores_select_permissions() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		// `person` is fully visible/deletable to a record session, but the `knows`
 		// edge table hides SELECT from it. Seed a node with one connected edge.
 		execute_all(
@@ -4888,10 +4884,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_match_after_set_rereads_live_state() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(
 			&ds,
 			&ses,
@@ -4919,10 +4915,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_match_after_delete_rereads_live_state() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
 			.await?;
 		// The trailing MATCH no longer observes the row the DELETE removed.
@@ -4937,10 +4933,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_match_after_insert_sees_new_node_and_anchors_on_binding() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A', age = 20;").await?;
 		// A trailing MATCH re-scans and observes the just-inserted node, and can join
 		// on the binding the INSERT created (`a.age` anchors the predicate on `b`).
@@ -4961,10 +4957,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_optional_match_after_set_rereads_live_state() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A'; CREATE person:2 SET name = 'B';")
 			.await?;
 		// An OPTIONAL block after a write takes the general left-join path (the
@@ -4984,10 +4980,10 @@ mod test {
 		Ok(())
 	}
 
-	#[cfg(feature = "opengql")]
+	#[cfg(feature = "gql")]
 	#[tokio::test]
 	async fn gql_optional_match_after_insert_sees_new_node() -> Result<()> {
-		let (ds, ses) = opengql_test_ds().await?;
+		let (ds, ses) = gql_test_ds().await?;
 		execute_all(&ds, &ses, "CREATE person:1 SET name = 'A';").await?;
 		// An OPTIONAL block after an INSERT must see the just-created node. The
 		// INSERT runs once per matched `person`; the trailing OPTIONAL re-scans

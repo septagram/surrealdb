@@ -1,9 +1,9 @@
-//! Graph-traversal operators — binding-table execution for OpenGQL v2.
+//! Graph-traversal operators — binding-table execution for GQL v2.
 //!
 //! These operators implement the graph-specific part of executing a lowered
 //! [`crate::expr::match_plan::MatchPlan`]: each produces rows that are
 //! `Value::Object`s keyed by binding name (the binding-row convention, see
-//! `doc/opengql/V2_DESIGN.md` §3). [`expand::Expand`] performs a single-hop
+//! `doc/gql/V2_DESIGN.md` §3). [`expand::Expand`] performs a single-hop
 //! graph traversal, binding the edge and reached node into each row;
 //! [`path_expand::PathExpand`] performs variable-length / quantified traversal,
 //! emitting one row per path; [`endpoint::EndpointBind`] binds a node from a

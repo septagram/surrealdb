@@ -302,7 +302,7 @@ impl Builder {
 			temporary_directory: self.temporary_directory,
 			cache: Arc::new(DatastoreCache::new(config.datastore_cache_size)),
 			#[cfg(all(feature = "graphql", not(target_family = "wasm")))]
-			gql_schema_cache: crate::gql::cache::GraphQLSchemaCache::default(),
+			graphql_schema_cache: crate::graphql::cache::GraphQLSchemaCache::default(),
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets,
 			sequences: Sequences::new(tf, id),

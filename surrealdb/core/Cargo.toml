@@ -15,7 +15,7 @@ license-file.workspace = true
 
 [features]
 # Public features
-default = ["kv-mem", "graphql", "opengql"]
+default = ["kv-mem", "graphql", "gql"]
 kv-mem = [
     "dep:surrealmx",
     "tokio/time",
@@ -60,12 +60,12 @@ allocation-tracking = []
 # GraphQL support
 graphql = ["dep:async-graphql"]
 
-# OpenGQL support
-opengql = []
+# GQL support
+gql = []
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["kv-mem", "kv-rocksdb", "http", "scripting", "graphql", "opengql"]
+features = ["kv-mem", "kv-rocksdb", "http", "scripting", "graphql", "gql"]
 targets = []
 
 [dependencies]

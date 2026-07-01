@@ -30,7 +30,7 @@ pub(crate) mod language;
 pub(crate) mod limit;
 pub(crate) mod literal;
 pub(crate) mod lookup;
-#[cfg(feature = "opengql")]
+#[cfg(feature = "gql")]
 pub(crate) mod match_plan;
 pub(crate) mod mock;
 pub(crate) mod model;
@@ -85,7 +85,7 @@ pub(crate) use self::literal::{Literal, ObjectEntry};
 pub(crate) use self::lookup::Lookup;
 // Re-exported for the GQL lowering and the streaming planner (PR-A landing
 // piecemeal); not yet referenced through this alias in this crate.
-#[cfg(feature = "opengql")]
+#[cfg(feature = "gql")]
 #[allow(unused_imports)]
 pub(crate) use self::match_plan::MatchPlan;
 pub(crate) use self::mock::Mock;
