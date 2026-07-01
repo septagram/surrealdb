@@ -7,6 +7,8 @@
 //! into nested fields without materialising the entire `Value` tree by using
 //! the per-type walkers emitted by `revision`'s `#[revisioned(...)]` derive.
 
+use std::borrow::Cow;
+
 use revision::optimised::IndexedMapWalker;
 use revision::{
 	BorrowedReader, DeserializeRevisioned, Error as RevisionError, SerializeRevisioned,
@@ -157,6 +159,65 @@ pub(crate) enum Extracted {
 	Bail,
 }
 
+/// Slice-direct fast path for a rev-2 [`Record`]'s `data` field wire bytes.
+///
+/// A stored record is `#[revisioned(revision(1), revision(2, optimised,
+/// indexed_struct))]` with two fields — `metadata` then `data`. Its rev-2
+/// wire is:
+///
+/// ```text
+/// u8      rev = 2       (varint; a single 0x02 byte under the default codec)
+/// u32_le  payload_len
+/// payload:
+///     [u32_le metadata_off][u32_le data_off]   (indexed_struct prologue, 2 fields)
+///     metadata bytes = payload[metadata_off..data_off]
+///     data bytes     = payload[data_off..]     (data is the last field)
+/// ```
+///
+/// Offsets are absolute indices into `payload`, so the `data` field — the
+/// last field — is exactly `payload[data_off..]`. Returning that slice is
+/// byte-for-byte what `Record::walk_revisioned(..)?.into_data_bytes()?`
+/// yields for a rev-2 record, but without constructing the walker enum or
+/// the `into_data_bytes` [`Cow`]. Returns [`None`] for anything this fast
+/// path does not recognise (rev != 2, truncated envelope), so the caller
+/// falls back to the walker chain — the fast path can never produce a
+/// different extraction, only decline to produce one.
+#[inline]
+fn rev2_record_data_bytes(record_bytes: &[u8]) -> Option<&[u8]> {
+	let (&rev, rest) = record_bytes.split_first()?;
+	if rev != 2 {
+		return None;
+	}
+	let len_bytes: [u8; 4] = rest.get(..4)?.try_into().ok()?;
+	let payload_len = u32::from_le_bytes(len_bytes) as usize;
+	let payload = rest.get(4..4 + payload_len)?;
+	// `data` is field 1 of the 2-field indexed_struct prologue; its absolute
+	// payload offset is the second u32_le, at payload[4..8].
+	let off_bytes: [u8; 4] = payload.get(4..8)?.try_into().ok()?;
+	let data_off = u32::from_le_bytes(off_bytes) as usize;
+	payload.get(data_off..)
+}
+
+/// Open a record's `data` field wire bytes: the [`rev2_record_data_bytes`]
+/// slice-direct fast path, falling back to the `Record::walk_revisioned` +
+/// `into_data_bytes` walker chain for rev-1 records (and any bytes the fast
+/// path declines). Shared by every pre-decode-filter descent entry point so
+/// the fused envelope open lives in one place.
+#[inline]
+pub(crate) fn record_data_bytes(record_bytes: &[u8]) -> Result<Cow<'_, [u8]>, RevisionError> {
+	if let Some(fast) = rev2_record_data_bytes(record_bytes) {
+		return Ok(Cow::Borrowed(fast));
+	}
+	// Cold rev-1 / unrecognised fallback. The walker's `into_data_bytes`
+	// borrow is tied to the local `reader`, not to `record_bytes`, so we
+	// can't return it borrowed; copy into an owned `Cow`. This path only
+	// fires for legacy rev-1 records (rev-2 is the fast path above), so the
+	// extra allocation is off the hot path.
+	let mut reader: &[u8] = record_bytes;
+	let data = Record::walk_revisioned(&mut reader).and_then(|w| w.into_data_bytes())?;
+	Ok(Cow::Owned(data.into_owned()))
+}
+
 /// Walk the revisioned `record_bytes` along `path` and decode the leaf as a
 /// [`Value`].
 ///
@@ -197,18 +258,14 @@ pub(crate) fn extract_field_from_record_bytes_parts(
 	if prefix.is_empty() && path.is_empty() {
 		return Extracted::Bail;
 	}
-	// Open the record walker, get the `data` field's wire bytes via the
-	// macro-emitted accessor. For rev-2 `indexed_struct` records this is
-	// O(1) (read `(data_off, data_off+1)` from the prologue, slice
-	// straight to the field); for rev-1 it's a sequential `metadata` skip.
-	// `into_data_bytes()` returns `Cow<'_, [u8]>` which derefs to
-	// `&[u8]` for the inner `Value::walk_revisioned` follow-up.
-	let mut record_reader: &[u8] = record_bytes;
-	let data_bytes =
-		match Record::walk_revisioned(&mut record_reader).and_then(|w| w.into_data_bytes()) {
-			Ok(b) => b,
-			Err(_) => return Extracted::Bail,
-		};
+	// Open the record's `data` field wire bytes: slice-direct on rev-2
+	// `indexed_struct` records, walker-chain fallback otherwise. Returns a
+	// `Cow<'_, [u8]>` which derefs to `&[u8]` for the inner
+	// `Value::walk_revisioned` follow-up.
+	let data_bytes = match record_data_bytes(record_bytes) {
+		Ok(b) => b,
+		Err(_) => return Extracted::Bail,
+	};
 	let mut reader: &[u8] = &data_bytes;
 	let value_walker = match Value::walk_revisioned(&mut reader) {
 		Ok(w) => w,
@@ -621,16 +678,12 @@ where
 		needles_sorted.windows(2).all(|w| w[0].as_ref() < w[1].as_ref()),
 		"needles_sorted must be strictly increasing in UTF-8 byte order",
 	);
-	// Open the record walker, take the `data` field's wire bytes via the
-	// macro-emitted accessor. O(1) on rev-2 `indexed_struct` records (read
-	// `data_off` from the prologue, slice); sequential `metadata` skip on
-	// rev-1.
-	let mut record_reader: &[u8] = record_bytes;
-	let data_bytes =
-		match Record::walk_revisioned(&mut record_reader).and_then(|w| w.into_data_bytes()) {
-			Ok(b) => b,
-			Err(_) => return SlotScanResult::Bail,
-		};
+	// Open the record's `data` field wire bytes: slice-direct on rev-2
+	// `indexed_struct` records, walker-chain fallback otherwise.
+	let data_bytes = match record_data_bytes(record_bytes) {
+		Ok(b) => b,
+		Err(_) => return SlotScanResult::Bail,
+	};
 	let mut reader: &[u8] = &data_bytes;
 	let value_walker = match Value::walk_revisioned(&mut reader) {
 		Ok(w) => w,

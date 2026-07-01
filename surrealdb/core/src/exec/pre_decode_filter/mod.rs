@@ -52,13 +52,12 @@ use revision::WalkRevisioned;
 pub(crate) use streaming::StreamingLeafEvaluator;
 use wire_literal::{LiteralSet, LiteralWire};
 
-use crate::catalog::Record;
 use crate::expr::operator::BinaryOperator;
 use crate::fnc::operate;
 use crate::key::record::RecordKey;
 use crate::val::object_extract::{
 	DescendResult, Extracted, PathSegment, SlotScanResult, WalkLeafErr,
-	descend_to_value_walker_parts, extract_field_from_record_bytes,
+	descend_to_value_walker_parts, extract_field_from_record_bytes, record_data_bytes,
 	scan_record_object_at_path_with_slots,
 };
 use crate::val::{RecordId, Value};
@@ -428,13 +427,9 @@ impl PreDecodeFilter {
 			if prefix.is_empty() && path.is_empty() {
 				return Err(WalkLeafErr::Bail);
 			}
-			// Open the record walker, take the `data` field's wire bytes via
-			// the macro-emitted accessor (O(1) on rev-2 `indexed_struct`
-			// records; sequential `metadata` skip on rev-1).
-			let mut record_reader: &[u8] = record_bytes;
-			let data_bytes = Record::walk_revisioned(&mut record_reader)
-				.and_then(|w| w.into_data_bytes())
-				.map_err(|_| WalkLeafErr::Bail)?;
+			// Open the record's `data` field wire bytes: slice-direct on
+			// rev-2 `indexed_struct` records, walker-chain fallback otherwise.
+			let data_bytes = record_data_bytes(record_bytes).map_err(|_| WalkLeafErr::Bail)?;
 			let mut reader: &[u8] = &data_bytes;
 			let value_walker =
 				Value::walk_revisioned(&mut reader).map_err(|_| WalkLeafErr::Bail)?;
@@ -690,13 +685,9 @@ impl PreDecodeFilter {
 	where
 		F: FnOnce(&[u8]) -> T,
 	{
-		// Open the record walker, take the `data` field's wire bytes via the
-		// macro-emitted accessor (O(1) on rev-2 `indexed_struct` records;
-		// sequential `metadata` skip on rev-1).
-		let mut record_reader: &[u8] = record_bytes;
-		let Ok(data_bytes) =
-			Record::walk_revisioned(&mut record_reader).and_then(|w| w.into_data_bytes())
-		else {
+		// Open the record's `data` field wire bytes: slice-direct on rev-2
+		// `indexed_struct` records, walker-chain fallback otherwise.
+		let Ok(data_bytes) = record_data_bytes(record_bytes) else {
 			return DescendResult::Bail;
 		};
 		let mut reader: &[u8] = &data_bytes;
