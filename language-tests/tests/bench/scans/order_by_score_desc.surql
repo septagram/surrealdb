@@ -1,6 +1,6 @@
 /**
 [env]
-imports = ["bench/util/records-100000.surql"]
+imports = ["bench/util/records-10000.surql"]
 
 [bench]
 reason = "Full sort of all records by score, top 100"

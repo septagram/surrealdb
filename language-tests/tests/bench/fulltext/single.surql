@@ -1,6 +1,6 @@
 /**
 [env]
-imports = ["bench/util/records-100000-fulltext.surql"]
+imports = ["bench/util/records-10000-fulltext.surql"]
 
 [bench]
 reason = "Full-text search for a single term (BM25)"

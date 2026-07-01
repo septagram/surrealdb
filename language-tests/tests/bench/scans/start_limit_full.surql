@@ -1,6 +1,6 @@
 /**
 [env]
-imports = ["bench/util/records-100000.surql"]
+imports = ["bench/util/records-10000.surql"]
 
 [bench]
 reason = "Select all fields from 100 records at offset 5000"

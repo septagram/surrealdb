@@ -1,6 +1,6 @@
 /**
 [env]
-imports = ["bench/util/records-seq-100000.surql"]
+imports = ["bench/util/records-seq-10000.surql"]
 
 [bench]
 reason = "Scan a contiguous mid-keyspace record-id range (ids only)"

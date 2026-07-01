@@ -1,6 +1,6 @@
 /**
 [env]
-imports = ["bench/util/records-10000.surql"]
+imports = ["bench/util/records-1000.surql"]
 
 [bench]
 reason = "Filter records against an uncorrelated aggregate subquery"
