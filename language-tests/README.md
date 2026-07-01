@@ -206,6 +206,8 @@ util/                                # import-only datasets (never run on their 
   records-100.surql / records-1000.surql       # small row counts for batch CRUD
   graph-sparse-5000.surql            # 5k person nodes + ~2 `knows` edges each (sparse)
   graph-dense-5000.surql             # 5k person nodes + ~10 `knows` edges each (dense)
+  graph-sparse-50000.surql           # 50k person nodes + ~2 `knows` edges each (large, uniform degree)
+  graph-hub-50000.surql              # 50k person nodes; 20 fixed hubs w/ 250 edges, rest w/ 2 (degree-skewed)
   embeddings-hnsw-5000.surql         # 5k 8-d vectors + HNSW index
   embeddings-diskann-5000.surql      # 5k 8-d vectors + DiskANN index
   embeddings-flat-5000.surql         # 5k 8-d vectors, no index (brute-force KNN)
@@ -225,7 +227,11 @@ scans/
 fulltext/                            # BM25 search: single / multi-AND / multi-OR (`@@`)
 graph/                               # 1-/2-hop (+ counts), filtered, mid-path filter, inbound,
                                      #   bidirectional, recursive, path-collect, shortest-path traversals
-                                     #   (each runs against BOTH the sparse and dense graph)
+                                     #   (each runs against BOTH the sparse and dense graph; two_hop and
+                                     #   shortest_path also carry a `large` arm against graph-sparse-50000)
+                                     #   plus deep_recursion (6 hops), hub_fanout (250-edge hub node,
+                                     #   graph-hub-50000 only), and traverse_aggregate (math::mean over
+                                     #   a traversed neighbour set)
 vector/                              # KNN: HNSW vs DiskANN vs brute-force
 references/                          # record references: reverse (`<~`) traversal/count/filtered, FETCH single + array
 mutate/                              # UPDATE/DELETE … WHERE, batch UPSERT, explicit transaction
