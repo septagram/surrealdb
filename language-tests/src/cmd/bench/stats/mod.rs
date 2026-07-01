@@ -180,6 +180,9 @@ pub struct ComparisonData {
 	//pub dist_median: Estimate,
 	//pub t: Estimate,
 	pub p_value: f64,
+	/// Median per-iteration time (seconds) of the baseline being compared against,
+	/// so a report can show the baseline's absolute time next to the current run.
+	pub base_median: f64,
 }
 
 impl ComparisonData {
@@ -214,6 +217,7 @@ impl ComparisonData {
 			//dist_median,
 			//t,
 			p_value,
+			base_median: base.median.point,
 		}
 	}
 }

@@ -158,6 +158,8 @@ struct CmdConfig<'a> {
 	dataset: Option<&'a String>,
 	backend: Backend,
 	save: bool,
+	quick: bool,
+	json: Option<&'a String>,
 	store: StoreConfig<'a>,
 }
 
@@ -169,6 +171,8 @@ impl<'a> CmdConfig<'a> {
 		let dataset = current.get_one::<String>("dataset");
 		let backend = *current.get_one::<Backend>("backend").unwrap();
 		let save = current.get_flag("save");
+		let quick = current.get_flag("quick");
+		let json = current.get_one::<String>("json");
 
 		Self {
 			path,
@@ -176,9 +180,62 @@ impl<'a> CmdConfig<'a> {
 			dataset,
 			backend,
 			save,
+			quick,
+			json,
 			store: StoreConfig::from_matches(parent),
 		}
 	}
+}
+
+/// Classifies a comparison against the baseline into a stable, machine-readable
+/// verdict. Kept in sync with the human-readable summary printed in `run()`:
+/// a difference that isn't statistically significant, or is significant but
+/// inside the noise threshold, is reported as `within-noise`.
+fn comparison_verdict(compare: &ComparisonData) -> &'static str {
+	if compare.p_value >= DEFAULT_SIGNIFICANCE_THRESHOLD {
+		return "within-noise";
+	}
+	let noise = DEFAULT_NOISE_THRESHOLD;
+	if compare.dist_mean.lower_bound < -noise && compare.dist_mean.upper_bound < -noise {
+		"improved"
+	} else if compare.dist_mean.lower_bound > noise && compare.dist_mean.upper_bound > noise {
+		"regressed"
+	} else {
+		"within-noise"
+	}
+}
+
+/// Per-bench comparison against the fetched baseline. Percentages are relative to
+/// the baseline (positive = slower than baseline = regression).
+#[derive(serde::Serialize)]
+struct JsonComparison {
+	/// Median per-iteration time of the baseline (`main`), in seconds.
+	base_median_secs: f64,
+	change_pct: f64,
+	change_lo_pct: f64,
+	change_hi_pct: f64,
+	p_value: f64,
+	verdict: &'static str,
+}
+
+/// One bench's result in the `--json` report. Times are in seconds.
+#[derive(serde::Serialize)]
+struct JsonBench {
+	name: String,
+	median_secs: f64,
+	median_lo_secs: f64,
+	median_hi_secs: f64,
+	mean_secs: f64,
+	comparison: Option<JsonComparison>,
+}
+
+/// The `--json` report: every measured bench plus its comparison (when a baseline
+/// was found in the store). Consumed by the PR-comment renderer in CI.
+#[derive(serde::Serialize)]
+struct JsonReport {
+	quick: bool,
+	backend: String,
+	benches: Vec<JsonBench>,
 }
 
 /// Main subcommand function, runs the actual subcommand.
@@ -399,7 +456,7 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 						.enable_all()
 						.build()
 						.unwrap()
-						.block_on(run_group(group, &config, baselines))
+						.block_on(run_group(group, &config, cfg.quick, baselines))
 				})
 				.join()
 		})
@@ -494,7 +551,7 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 						.enable_all()
 						.build()
 						.unwrap()
-						.block_on(run_bench(&run, &config, baseline, None))
+						.block_on(run_bench(&run, &config, baseline, cfg.quick, None))
 				})
 				.join()
 		})
@@ -650,6 +707,37 @@ pub async fn run(color: ColorMode, parent: &ArgMatches, current: &ArgMatches) ->
 				m.labels.iter().filter(|x| x.is_high() && x.is_severe()).count()
 			);
 		}
+	}
+
+	if let Some(json_path) = cfg.json {
+		let benches = measurements
+			.iter()
+			.map(|(name, m, compare)| JsonBench {
+				name: name.clone(),
+				median_secs: m.median.point,
+				median_lo_secs: m.median.lower_bound,
+				median_hi_secs: m.median.upper_bound,
+				mean_secs: m.mean.point,
+				comparison: compare.as_ref().map(|c| JsonComparison {
+					base_median_secs: c.base_median,
+					change_pct: c.dist_mean.point * 100.0,
+					change_lo_pct: c.dist_mean.lower_bound * 100.0,
+					change_hi_pct: c.dist_mean.upper_bound * 100.0,
+					p_value: c.p_value,
+					verdict: comparison_verdict(c),
+				}),
+			})
+			.collect();
+		let report = JsonReport {
+			quick: cfg.quick,
+			backend: cfg.backend.to_string(),
+			benches,
+		};
+		let json =
+			serde_json::to_string_pretty(&report).context("Failed to serialize benchmark JSON")?;
+		std::fs::write(json_path, json)
+			.with_context(|| format!("Failed to write benchmark JSON to {json_path}"))?;
+		println!("Wrote benchmark JSON to {json_path}");
 	}
 
 	for e in load_errors.iter() {
@@ -895,6 +983,7 @@ enum GroupOutcome {
 async fn run_group(
 	group: &[TestRun<BenchRunConfig>],
 	config: &BenchConfig,
+	quick: bool,
 	baselines: Vec<Option<MeasurementData>>,
 ) -> Result<GroupOutcome> {
 	let token = tokio_util::sync::CancellationToken::new();
@@ -909,7 +998,7 @@ async fn run_group(
 	// `InsufficientSamples`) is returned to `run()` for storing/printing.
 	let mut results = Vec::with_capacity(group.len());
 	for (run, baseline) in group.iter().zip(baselines) {
-		results.push(run_bench(run, config, baseline, Some(dbs.clone())).await?);
+		results.push(run_bench(run, config, baseline, quick, Some(dbs.clone())).await?);
 	}
 
 	Ok(GroupOutcome::Ran(results))
@@ -929,14 +1018,45 @@ async fn run_bench(
 	run: &TestRun<BenchRunConfig>,
 	config: &BenchConfig,
 	baseline: Option<MeasurementData>,
+	quick: bool,
 	shared_dbs: Option<Arc<Datastore>>,
 ) -> Result<BenchRunResult> {
-	println!("Running bench {}", run.name());
+	println!(
+		"Running bench {}{}",
+		run.name(),
+		if quick {
+			" [quick]"
+		} else {
+			""
+		}
+	);
 	println!("Warming up");
 
 	let bench_config = &run.case.test.config.parsed.bench;
 
-	let warmup_time = bench_config.warmup.0;
+	// Quick mode shrinks every timing knob ~10x for a fast, coarse comparison: it
+	// reliably surfaces large regressions but is too low-powered for small drift.
+	// Otherwise honour the per-bench `[bench]` config.
+	let warmup_time = if quick {
+		Duration::from_millis(250)
+	} else {
+		bench_config.warmup.0
+	};
+	let sample_size = if quick {
+		10
+	} else {
+		bench_config.sample_size
+	};
+	let measurement_time = if quick {
+		Duration::from_secs(2)
+	} else {
+		bench_config.measurement_time.0
+	};
+	let max_time = if quick {
+		Duration::from_secs(10)
+	} else {
+		bench_config.max_time.0
+	};
 	let token = tokio_util::sync::CancellationToken::new();
 
 	// Read-only benches (`rebuild = false`, the default) run against the group's
@@ -991,21 +1111,19 @@ async fn run_bench(
 
 	let expected_iteration_time = measured_warmup_time.as_secs_f64() / count as f64;
 
-	let iterations_per_samples = ((bench_config.measurement_time.0.as_secs_f64()
-		/ expected_iteration_time
-		/ bench_config.sample_size as f64)
-		.ceil() as u64)
-		.max(1);
+	let iterations_per_samples =
+		((measurement_time.as_secs_f64() / expected_iteration_time / sample_size as f64).ceil()
+			as u64)
+			.max(1);
 
 	if iterations_per_samples == 1 {
 		println!(
 			"Could not complete {} samples in set measurement_time of {:?}",
-			bench_config.sample_size, bench_config.measurement_time.0
+			sample_size, measurement_time
 		);
 	}
 
-	let estimate =
-		expected_iteration_time * iterations_per_samples as f64 * bench_config.sample_size as f64;
+	let estimate = expected_iteration_time * iterations_per_samples as f64 * sample_size as f64;
 
 	println!(
 		"Completed {count} iterations in {warmup_time:?}, estimated execution time is {:?}",
@@ -1016,11 +1134,10 @@ async fn run_bench(
 	// import + warmup) samples only the timed statements.
 	bench_marker("__BENCH_MEASURE_START__");
 
-	let max_time = bench_config.max_time.0;
 	let measure_start = Instant::now();
 	let mut iterations = Vec::new();
 	let mut samples = Vec::new();
-	for _ in 0..bench_config.sample_size {
+	for _ in 0..sample_size {
 		let mut sample_duration = 0.0;
 		for _ in 0..iterations_per_samples {
 			if let Some((dbs, session, statement)) = shared.as_ref() {
@@ -1050,7 +1167,7 @@ async fn run_bench(
 			println!(
 				"Exceeded max_time of {max_time:?}; stopping after {} of {} samples",
 				samples.len(),
-				bench_config.sample_size
+				sample_size
 			);
 			break;
 		}

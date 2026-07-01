@@ -93,6 +93,12 @@ cargo make bench -- scans/where_integer_in_many_full --profile
 
 # restrict a matrix scan to a single dataset variant (see "dataset matrix" below)
 cargo make bench -- scans/where_integer_in_many_full --dataset indexed
+
+# fast, coarse run: shrinks every timing knob ~10x (see "--quick" below)
+cargo make bench -- scans/count --quick
+
+# write per-bench results + the comparison verdict to a JSON file
+cargo make bench -- scans/count --json results.json
 ```
 
 Benches run **strictly serially** (never in parallel — that would corrupt
@@ -100,6 +106,38 @@ timings). Each bench warms up, then collects `sample_size` samples and reports
 mean / median / std-dev / MAD with confidence intervals, plus a comparison
 against the saved baseline (improved / regressed / within-noise, with a
 p-value).
+
+`--quick` overrides every bench's timing config with much smaller values (250ms
+warmup, 10 samples, 2s measurement, 10s cap) for a fast, low-power local pass: it
+reliably surfaces **large** regressions but is too coarse for few-percent drift.
+
+`--json <path>` writes a machine-readable report — for each bench its median /
+mean times and, when a baseline was found, the baseline's median, percentage
+change, p-value and verdict. Used to render the PR-comparison comment.
+
+`--store-url <ws>` compares against (and, with `--save`, writes to) a remote
+SurrealDB bench datastore instead of the local one. The harness `fetch_latest`es
+the most recent stored measurement per bench and compares the current run against
+it — which is how the PR workflow compares against the nightly `main` baseline.
+Requires the `bench-remote-store` feature.
+
+#### PR comparison (PR vs nightly `main`)
+
+The `Language bench (PR)` GitHub Actions workflow
+([`.github/workflows/language-bench-quick.yml`](../.github/workflows/language-bench-quick.yml))
+manages a single sticky comment on every PR:
+
+1. **On open**, the comment explains how to opt in (add the **`benchmark`** label).
+2. **When the label is added** (and on every push while it's set), it benchmarks
+   **only the PR head** (full run, on the `runner-arm-bench` pool) and compares it,
+   read-only, against the latest `main` baseline in the shared bench datastore.
+
+`main` itself is **not** benchmarked by this workflow — it's benchmarked by the
+[nightly run](../.github/workflows/nightly-bench.yml) (also full, also
+`runner-arm-bench`), which `--save`s `main`'s results to that store. So the
+baseline is full-quality, measured on the same runner pool, and refreshes whenever
+nightly re-runs (or nightly is dispatched manually after a notable change). Remove
+the label to stop.
 
 By default benches run on the in-memory engine. `--backend surrealkv` (always
 available) or `--backend rocksdb` (build with `--features backend-rocksdb`) run
@@ -291,8 +329,8 @@ flags to `scripts/bench/measure.sh` (timing, the default) or, with `--profile`,
 same arguments, or drive the harness binary yourself:
 
 ```bash
-# run every bench (no filter), or one by path substring; --save/--dataset optional
-cargo run --features bench -- bench run [--save] [--dataset NAME] [--backend mem] [<filter>]
+# run every bench (no filter), or one by path substring; flags are all optional
+cargo run --features bench -- bench run [--save] [--dataset NAME] [--backend mem] [--quick] [--json PATH] [<filter>]
 ```
 
 `scripts/bench/optimise.workflow.js` is a workflow recipe driving an AI

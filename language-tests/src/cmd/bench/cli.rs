@@ -23,6 +23,8 @@ pub fn cmd() -> Command {
 			)
             .arg(arg!(--path <PATH> "The path to tests directory").default_value("./tests"))
 			.arg(arg!(-s --save "Save the result to the comparison datastore"))
+			.arg(arg!(-q --quick "Run a fast, low-sample comparison (coarse: catches large regressions, not small drift)"))
+			.arg(arg!(--json <PATH> "Write per-bench results and the comparison verdict to a JSON file"))
 		)
 		.subcommand_required(true)
 }
