@@ -4305,6 +4305,22 @@ impl Datastore {
 		session: &Session,
 		mut req: ApiRequest,
 	) -> Result<ApiResponse> {
+		// Enforce the tenant boundary before resolving or dispatching anything.
+		// The namespace/database come from caller-controlled input (the
+		// `/api/:ns/:db/:endpoint` URL path) and the HTTP route has already
+		// overwritten the session's selected ns/db with them, so the
+		// authenticated level is the only trustworthy scope. A principal
+		// authenticated for one tenant must not be able to invoke another
+		// tenant's custom API — whose handler runs with permissions disabled
+		// (GHSA-848m-r628-vrxw).
+		if !session.au.can_access_ns_db(ns, db) {
+			debug!(
+				request_id = %req.request_id,
+				"Custom API request denied: URL namespace/database is outside the authenticated session scope"
+			);
+			return Ok(ApiResponse::from_error(ApiError::PermissionDenied, req.request_id.clone()));
+		}
+
 		let tx = Arc::new(self.transaction(TransactionType::Write, LockType::Optimistic).await?);
 
 		let db = tx.ensure_ns_db(None, ns, db).await?;

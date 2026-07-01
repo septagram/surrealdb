@@ -71,6 +71,22 @@ pub async fn process_api_request_with_stack(
 	api: &ApiDefinition,
 	req: ApiRequest,
 ) -> Result<ApiResponse> {
+	// Tenant-boundary enforcement. The API handler ultimately runs with
+	// permissions disabled, so reaching it for a namespace/database the caller
+	// is not authenticated for is a cross-tenant authorization bypass. The
+	// selected ns/db can be steered by caller-controlled input — the URL path
+	// on the HTTP route, or session headers / `USE` for `api::invoke` — so the
+	// authenticated level is the only trustworthy scope. Both entry points
+	// converge here, making this the authoritative gate (GHSA-848m-r628-vrxw).
+	let (ns_name, db_name) = opt.ns_db()?;
+	if !opt.auth.can_access_ns_db(ns_name, db_name) {
+		trace!(
+			request_id = %req.request_id,
+			"API request denied: selected namespace/database is outside the authenticated session scope"
+		);
+		return Ok(ApiResponse::from_error(ApiError::PermissionDenied, req.request_id.clone()));
+	}
+
 	// `DefineApiStatement::compute` rejects duplicate methods across `FOR`
 	// clauses and `AlterApiStatement::compute` strips a method from any
 	// pre-existing action before adding a new one for it, so at most one
