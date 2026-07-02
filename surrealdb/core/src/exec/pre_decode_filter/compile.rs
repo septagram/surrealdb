@@ -965,13 +965,8 @@ fn flat_clauses_from_specs(specs: &[FuseLeaf]) -> Option<FusedFlatClauses> {
 			reversed: s.reversed,
 		});
 	}
-	let inner: Vec<FusedFlatClause> = map
-		.into_iter()
-		.map(|(key_utf8, ops)| FusedFlatClause {
-			key_utf8,
-			ops,
-		})
-		.collect();
+	let inner: Vec<FusedFlatClause> =
+		map.into_iter().map(|(key_utf8, ops)| FusedFlatClause::new(key_utf8, ops)).collect();
 	FusedFlatClauses::try_new(inner)
 }
 
