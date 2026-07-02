@@ -33,7 +33,7 @@ authors = ["Tobie Morgan Hitchcock <tobie@surrealdb.com>"]
 edition = "2024"
 license-file = "LICENSE"
 publish = false
-version = "3.2.0-beta.3"
+version = "3.2.0"
 description = "A scalable, distributed, collaborative, document-graph database, for the realtime web"
 repository = "https://github.com/surrealdb/surrealdb"
 homepage = "https://github.com/surrealdb/surrealdb"
@@ -48,26 +48,26 @@ categories = ["database-implementations", "data-structures", "embedded"]
 
 [workspace.dependencies]
 # SurrealDB crates
-surrealdb = { version = "3.2.0-beta.3", path = "surrealdb", default-features = false }
-surrealdb-strand = { version = "3.2.0-beta.3", path = "surrealdb/strand", default-features = false }
-surrealdb-core = { version = "3.2.0-beta.3", path = "surrealdb/core", default-features = false }
-surrealdb-server = { version = "3.2.0-beta.3", path = "surrealdb/server", default-features = false }
-surrealdb-mcp = { version = "3.2.0-beta.3", path = "surrealdb/mcp", default-features = false }
-surrealdb-types = { version = "3.2.0-beta.3", path = "surrealdb/types" }
-surrealdb-types-derive = { version = "3.2.0-beta.3", path = "surrealdb/types/derive" }
+surrealdb = { version = "3.2.0", path = "surrealdb", default-features = false }
+surrealdb-strand = { version = "3.2.0", path = "surrealdb/strand", default-features = false }
+surrealdb-core = { version = "3.2.0", path = "surrealdb/core", default-features = false }
+surrealdb-server = { version = "3.2.0", path = "surrealdb/server", default-features = false }
+surrealdb-mcp = { version = "3.2.0", path = "surrealdb/mcp", default-features = false }
+surrealdb-types = { version = "3.2.0", path = "surrealdb/types" }
+surrealdb-types-derive = { version = "3.2.0", path = "surrealdb/types/derive" }
 ast = { package = "surrealdb-ast", path = "surrealdb/ast" }
 token = { package = "surrealdb-token", path = "surrealdb/token" }
 parser = { package = "surrealdb-parser", path = "surrealdb/parser" }
 common = { package = "surrealdb-common", path = "surrealdb/common" }
-surrealdb-collections = { version = "3.2.0-beta.3", path = "surrealdb/collections" }
+surrealdb-collections = { version = "3.2.0", path = "surrealdb/collections" }
 
 # SurrealML crates
 surrealml-core = { version = "0.1", path = "surrealml/core" }
 # Surrealism crates
-surrealism = { version = "0.5.0-beta.1", path = "surrealism" }
-surrealism-macros = { version = "0.5.0-beta.1", path = "surrealism/macros", default-features = false }
-surrealism-runtime = { version = "0.5.0-beta.1", path = "surrealism/runtime" }
-surrealism-types = { version = "0.5.0-beta.1", path = "surrealism/types", default-features = false }
+surrealism = { version = "0.5", path = "surrealism" }
+surrealism-macros = { version = "0.5", path = "surrealism/macros", default-features = false }
+surrealism-runtime = { version = "0.5", path = "surrealism/runtime" }
+surrealism-types = { version = "0.5", path = "surrealism/types", default-features = false }
 # External surreal crates
 affinitypool = "0.7.0"
 dmp = "0.2.3"
