@@ -62,6 +62,12 @@ pub(crate) struct OperatorMetrics {
 	/// not written by [`MetricsStream`] — the scan visitor accumulates per
 	/// cursor batch and flushes via [`OperatorMetrics::add_skipped_rows`].
 	skipped_rows: AtomicU64,
+	/// Total graph adjacency-key entries scanned by a graph edge scan,
+	/// regardless of whether they matched a pushed-down predicate. This is the
+	/// denominator for traversal filter selectivity (matched = `output_rows`).
+	/// Like `skipped_rows`, the scan accumulates per cursor batch and flushes
+	/// via [`OperatorMetrics::add_edges_scanned`].
+	edges_scanned: AtomicU64,
 }
 
 impl OperatorMetrics {
@@ -77,6 +83,7 @@ impl OperatorMetrics {
 			output_batches: AtomicU64::new(0),
 			elapsed_ns: AtomicU64::new(0),
 			skipped_rows: AtomicU64::new(0),
+			edges_scanned: AtomicU64::new(0),
 		}
 	}
 
@@ -117,6 +124,16 @@ impl OperatorMetrics {
 	/// Record `n` rows skipped before decode by a scan-side reject check.
 	pub(crate) fn add_skipped_rows(&self, n: u64) {
 		self.skipped_rows.fetch_add(n, Ordering::Relaxed);
+	}
+
+	/// Total graph adjacency-key entries scanned so far.
+	pub(crate) fn edges_scanned(&self) -> u64 {
+		self.edges_scanned.load(Ordering::Relaxed)
+	}
+
+	/// Record `n` graph adjacency-key entries scanned by a graph edge scan.
+	pub(crate) fn add_edges_scanned(&self, n: u64) {
+		self.edges_scanned.fetch_add(n, Ordering::Relaxed);
 	}
 
 	/// Record one batch of `rows` values, adding `delta_ns` to elapsed time.
