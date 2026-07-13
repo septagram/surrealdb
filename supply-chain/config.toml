@@ -34,13 +34,22 @@ audit-as-crates-io = false
 [policy.surrealdb]
 audit-as-crates-io = false
 
+[policy.surrealdb-ast]
+audit-as-crates-io = false
+
 [policy.surrealdb-collections]
+audit-as-crates-io = false
+
+[policy.surrealdb-common]
 audit-as-crates-io = false
 
 [policy.surrealdb-core]
 audit-as-crates-io = false
 
 [policy.surrealdb-mcp]
+audit-as-crates-io = false
+
+[policy.surrealdb-parser]
 audit-as-crates-io = false
 
 [policy.surrealdb-profiling]
@@ -50,6 +59,9 @@ audit-as-crates-io = false
 audit-as-crates-io = false
 
 [policy.surrealdb-strand]
+audit-as-crates-io = false
+
+[policy.surrealdb-token]
 audit-as-crates-io = false
 
 [policy.surrealdb-types]
@@ -339,10 +351,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-deque]]
 version = "0.8.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.crossbeam-epoch]]
-version = "0.9.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-queue]]
