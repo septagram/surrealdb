@@ -31,6 +31,7 @@ impl Tl {
 			TaskLeaseType::EventProcessing => 3,
 			TaskLeaseType::ReclaimTombstones => 4,
 			TaskLeaseType::IndexBuildResume => 5,
+			TaskLeaseType::RpcSessionCleanup => 6,
 		};
 		Self {
 			__: b'/',

@@ -103,6 +103,7 @@ pub async fn init<
 		engine,
 		crt: None,
 		key: None,
+		durable_session_ttl: None,
 	};
 
 	crate::env::init()?;

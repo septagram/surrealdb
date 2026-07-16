@@ -228,6 +228,7 @@ pub struct Readiness {
 /// - `client_ip`: [`ClientIp::Socket`] (extract the client IP from the raw socket)
 /// - `no_identification_headers`: `false` (include `Server` and version headers)
 /// - `allow_origin`: empty (allow all origins)
+/// - `durable_session_ttl`: `None` (HTTP RPC sessions are in-memory only)
 ///
 /// # Example
 ///
@@ -241,6 +242,7 @@ pub struct Readiness {
 ///     client_ip: ClientIp::None,
 ///     no_identification_headers: true,
 ///     allow_origin: vec!["https://example.com".to_string()],
+///     durable_session_ttl: None,
 /// };
 /// ```
 #[derive(Clone, Debug)]
@@ -252,6 +254,11 @@ pub struct RouterOptions {
 	/// Allowed CORS origins. When empty (the default), all origins are allowed.
 	/// Each entry should be a valid origin string (e.g. `"https://example.com"`).
 	pub allow_origin: Vec<String>,
+	/// When set, client-attached HTTP RPC sessions are persisted in the
+	/// datastore — surviving server restarts and shared across cluster nodes
+	/// — and expire after this idle TTL. `None` (the default) keeps sessions
+	/// in-memory only.
+	pub durable_session_ttl: Option<Duration>,
 }
 
 impl Default for RouterOptions {
@@ -260,6 +267,7 @@ impl Default for RouterOptions {
 			client_ip: client_ip::ClientIp::Socket,
 			no_identification_headers: false,
 			allow_origin: Vec::new(),
+			durable_session_ttl: None,
 		}
 	}
 }
@@ -270,6 +278,7 @@ impl From<&Config> for RouterOptions {
 			client_ip: cfg.client_ip,
 			no_identification_headers: cfg.no_identification_headers,
 			allow_origin: cfg.allow_origin.clone(),
+			durable_session_ttl: cfg.durable_session_ttl,
 		}
 	}
 }
@@ -542,7 +551,11 @@ impl SurrealRouter {
 		// (if metrics are enabled) is threaded through so the WebSocket I/O
 		// paths can increment per-protocol byte counters without grabbing any
 		// global state.
-		let rpc_state = Arc::new(RpcState::new_with_metrics(Arc::clone(&ds), prometheus_observer));
+		let rpc_state = Arc::new(RpcState::new_with_options(
+			Arc::clone(&ds),
+			prometheus_observer,
+			opt.durable_session_ttl,
+		));
 
 		// Apply state
 		let axum_app = axum_app.with_state(Arc::clone(&rpc_state));

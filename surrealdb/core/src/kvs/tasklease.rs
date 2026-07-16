@@ -32,6 +32,8 @@ pub(crate) enum TaskLeaseType {
 	EventProcessing,
 	/// Background reclaim of tombstoned namespace/database/index data
 	ReclaimTombstones,
+	/// Purging expired durable RPC sessions
+	RpcSessionCleanup,
 }
 
 /// Represents a distributed task lease stored in the datastore.
