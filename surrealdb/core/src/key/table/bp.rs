@@ -122,8 +122,6 @@ impl<'a> Bp<'a> {
 		}
 	}
 
-	#[cfg(test)]
-	#[cfg_attr(not(feature = "kv-mem"), allow(dead_code))]
 	/// Return the record-keyed range for primary appending markers in one generation.
 	pub(crate) fn range(
 		ns: NamespaceId,
