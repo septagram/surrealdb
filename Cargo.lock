@@ -7092,7 +7092,7 @@ dependencies = [
 
 [[package]]
 name = "surrealml-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "bytes",
  "futures",
