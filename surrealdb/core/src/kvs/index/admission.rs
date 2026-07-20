@@ -88,6 +88,19 @@ impl IndexBuilder {
 			ix: ix.index_id,
 		};
 
+		// A `DEFINE INDEX` earlier in this same user transaction deferred its
+		// build: the definition and its `Building` state are staged but not
+		// yet durable, so no admission ticket can be reserved against them.
+		// Skip indexing — the post-commit initial scan indexes every record
+		// this transaction stages, including this write. The distinct result
+		// matters for deletes: nothing is queued here, so no replay will ever
+		// need the record's shared doc-ID mapping, and the caller must run
+		// the normal central removal instead of deferring it to the build's
+		// reclaim sweep (see `ConsumeResult::SkippedDeferredBuild`).
+		if ctx.tx().is_deferred_index_build(&cache_key) {
+			return Ok(ConsumeResult::SkippedDeferredBuild);
+		}
+
 		// Reuse an admission cached earlier in this user transaction; this is
 		// the common path for bulk INSERT/UPDATE/DELETE statements that touch
 		// many records on the same index. Revalidate against the live `!bs`

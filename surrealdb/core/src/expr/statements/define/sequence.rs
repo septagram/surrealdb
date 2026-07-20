@@ -112,11 +112,13 @@ impl DefineSequenceStatement {
 		// Set the definition
 		txn.set(&key, &sq).await?;
 
-		// Clear any pre-existing sequence records
+		// Clear any pre-existing sequence records. Record-free spans: these
+		// deletes must not mark the transaction as having record writes
+		// (which would needlessly defer a later `DEFINE INDEX` in it).
 		let ba_range = Prefix::new_ba_range(db.namespace_id, db.database_id, &sq.name)?;
-		txn.delr(ba_range).await?;
+		txn.delr_record_free(ba_range).await?;
 		let st_range = Prefix::new_st_range(db.namespace_id, db.database_id, &sq.name)?;
-		txn.delr(st_range).await?;
+		txn.delr_record_free(st_range).await?;
 
 		// Clear the cache
 		txn.clear_cache();

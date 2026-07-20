@@ -5,7 +5,6 @@ use storekey::{BorrowDecode, Encode};
 
 use crate::catalog::{DatabaseId, NamespaceId};
 use crate::key::category::{Categorise, Category};
-use crate::kvs::impl_kv_key_storekey;
 use crate::val::TableName;
 
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Encode, BorrowDecode)]
@@ -20,7 +19,28 @@ pub(crate) struct TableRoot<'a> {
 	pub tb: Cow<'a, TableName>,
 }
 
-impl_kv_key_storekey!(TableRoot<'_> => Vec<u8>);
+// Hand-written impl (instead of `impl_kv_key_storekey!`) so prefix deletes
+// over a whole table (`REMOVE TABLE`) mark the transaction as staging record
+// writes on that table: the span covers the table's record keys, and a
+// `DEFINE INDEX` later in the same transaction must defer its build rather
+// than scan a snapshot that still contains the doomed rows.
+impl crate::kvs::KVKey for TableRoot<'_> {
+	type ValueType = Vec<u8>;
+
+	fn record_table(&self) -> Option<crate::kvs::RecordTableRef<'_>> {
+		Some(crate::kvs::RecordTableRef {
+			ns: self.ns,
+			db: self.db,
+			tb: self.tb.as_ref(),
+		})
+	}
+
+	fn encode_key(&self) -> anyhow::Result<Vec<u8>> {
+		Ok(storekey::encode_vec(self).map_err(|_| crate::err::Error::Unencodable)?)
+	}
+
+	fn value_context(&self) {}
+}
 
 pub fn new(ns: NamespaceId, db: DatabaseId, tb: &TableName) -> TableRoot<'_> {
 	TableRoot::new(ns, db, tb)

@@ -36,12 +36,13 @@ use crate::catalog::providers::{
 	DatabaseProvider, NamespaceProvider, NodeProvider, RootProvider, TableProvider, UserProvider,
 };
 use crate::catalog::{
-	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig, IndexId,
-	NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
+	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig,
+	IndexDefinition, IndexId, NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
 };
 use crate::cf::Changefeed;
 use crate::cnf::CommonConfig;
-use crate::ctx::Context;
+use crate::ctx::{Context, FrozenContext};
+use crate::dbs::Options;
 use crate::dbs::node::Node;
 use crate::doc::CursorRecord;
 use crate::err::Error;
@@ -164,6 +165,41 @@ pub struct Transaction {
 	/// state and index data from separate transactions. These cleanups remove that
 	/// provisional state only when the schema transaction does not commit.
 	pending_uncommitted_index_builds: Mutex<Vec<PendingUncommittedIndexBuild>>,
+	/// Which tables this transaction has staged record-data writes to.
+	///
+	/// Maintained by the typed write methods via [`KVKey::record_table`];
+	/// opaque byte keys and range/prefix deletes whose key type carries no
+	/// record span set the `untracked` flag instead (they conservatively
+	/// count as a record write to every table). `DEFINE INDEX` reads this to
+	/// decide whether its build must be deferred until after commit: the
+	/// index builder scans the table with separate transactions and can
+	/// never see this transaction's uncommitted records — but only staged
+	/// writes to the *indexed* table matter, so writes to other tables
+	/// (e.g. a fixture block populating one table before indexing another)
+	/// keep the synchronous blocking build.
+	///
+	/// A synchronous mutex: only held for a lookup or an insert (never
+	/// across an await), inside write paths whose futures every statement
+	/// execution chain embeds — an async lock here would grow all of them.
+	record_writes: std::sync::Mutex<RecordWrites>,
+	/// Indexes whose build this transaction deferred to after commit.
+	///
+	/// Populated by `DEFINE INDEX` when it stages a deferred build (see
+	/// [`Self::register_deferred_index_build_start`]). Writes to these
+	/// indexes later in the same transaction skip index maintenance and
+	/// admission entirely: the definition and its `Building` state are
+	/// staged but not durable, so no admission ticket can be reserved, and
+	/// the post-commit initial scan indexes every row this transaction
+	/// stages.
+	deferred_index_builds: std::sync::Mutex<HashSet<CachedIndexBuildReservationKey>>,
+	/// Deferred index builds to start once this transaction has committed.
+	///
+	/// Registered together with the staged `Building` state; discarded on
+	/// cancel or commit failure, where the staged state vanishes with the
+	/// transaction. The staged state has no owner, so the stalled-build
+	/// resume scan can still adopt the build if the process dies before (or
+	/// while) these run.
+	pending_index_build_starts: Mutex<Vec<PendingIndexBuildStart>>,
 }
 
 const INDEX_BUILD_RESERVATION_RELEASE_RETRY_SLEEP: Duration = Duration::from_millis(100);
@@ -242,6 +278,121 @@ impl PendingIndexBuilderAbort {
 				"failed to abort local index builder after committed schema retirement: {err}"
 			);
 		}
+	}
+}
+
+/// Per-transaction tracking of staged record-data writes (see the
+/// `Transaction::record_writes` field).
+#[derive(Default)]
+struct RecordWrites {
+	/// Set by opaque byte keys and by range/prefix deletes with no record
+	/// span: they conservatively count as a record write to every table.
+	untracked: bool,
+	/// Tables whose record span this transaction has written to.
+	tables: HashMap<(NamespaceId, DatabaseId), HashSet<TableName>>,
+	/// One frame per active savepoint (see [`Transaction::new_save_point`]),
+	/// recording what this tracker gained inside it, so a savepoint rollback
+	/// undoes the tracking together with the staged KV changes. Without
+	/// this, a failed create attempt (`INSERT IGNORE`, an `UPSERT` retry)
+	/// would leave its table marked and needlessly defer a later
+	/// `DEFINE INDEX` in the same transaction.
+	save_points: Vec<RecordWritesFrame>,
+}
+
+/// What [`RecordWrites`] gained within one savepoint: the tables first
+/// marked — and whether `untracked` first flipped — inside it.
+#[derive(Default)]
+struct RecordWritesFrame {
+	added_tables: Vec<(NamespaceId, DatabaseId, TableName)>,
+	set_untracked: bool,
+}
+
+impl RecordWrites {
+	fn note_table(&mut self, ns: NamespaceId, db: DatabaseId, tb: &TableName) {
+		let tables = self.tables.entry((ns, db)).or_default();
+		// Look up before inserting so repeated writes to the same table (the
+		// common bulk-statement case) never clone the table name; the undo
+		// entry is only recorded for the write that added the table.
+		if !tables.contains(tb) {
+			tables.insert(tb.clone());
+			if let Some(frame) = self.save_points.last_mut() {
+				frame.added_tables.push((ns, db, tb.clone()));
+			}
+		}
+	}
+
+	fn note_untracked(&mut self) {
+		if !self.untracked {
+			self.untracked = true;
+			if let Some(frame) = self.save_points.last_mut() {
+				frame.set_untracked = true;
+			}
+		}
+	}
+
+	fn push_save_point(&mut self) {
+		self.save_points.push(RecordWritesFrame::default());
+	}
+
+	/// Undo everything the innermost savepoint added: entries marked before
+	/// it never got an undo record, so they survive.
+	fn rollback_save_point(&mut self) {
+		if let Some(frame) = self.save_points.pop() {
+			for (ns, db, tb) in frame.added_tables {
+				if let Some(tables) = self.tables.get_mut(&(ns, db)) {
+					tables.remove(&tb);
+				}
+			}
+			if frame.set_untracked {
+				self.untracked = false;
+			}
+		}
+	}
+
+	/// Keep the innermost savepoint's additions, re-parenting its undo
+	/// records so an enclosing rollback still covers them.
+	fn release_save_point(&mut self) {
+		if let Some(frame) = self.save_points.pop()
+			&& let Some(parent) = self.save_points.last_mut()
+		{
+			parent.added_tables.extend(frame.added_tables);
+			parent.set_untracked |= frame.set_untracked;
+		}
+	}
+}
+
+/// A deferred index build to launch after this transaction commits.
+///
+/// `DEFINE INDEX` in a transaction that already staged record writes to the
+/// indexed table cannot build synchronously: the builder scans with separate
+/// transactions, which cannot see this transaction's uncommitted records, and
+/// those records only become visible once the transaction commits — after the
+/// statement has returned. The statement stages the catalog definition and a
+/// `Building` build state instead, and registers this start to run the real
+/// build once everything is durable.
+struct PendingIndexBuildStart {
+	builder: IndexBuilder,
+	ctx: FrozenContext,
+	opt: Options,
+	ns: NamespaceId,
+	db: DatabaseId,
+	tb: TableName,
+	table_id: TableId,
+	ix: Arc<IndexDefinition>,
+}
+
+impl PendingIndexBuildStart {
+	/// Spawn the deferred build task; never blocks the commit path.
+	fn start(self) {
+		self.builder.clone().start_deferred_build(
+			self.ctx,
+			self.opt,
+			self.ns,
+			self.db,
+			self.tb,
+			self.table_id,
+			self.ix,
+		);
 	}
 }
 
@@ -789,6 +940,9 @@ impl Transaction {
 			cached_index_build_reservations: Mutex::new(HashMap::new()),
 			pending_index_builder_aborts: Mutex::new(Vec::new()),
 			pending_uncommitted_index_builds: Mutex::new(Vec::new()),
+			record_writes: std::sync::Mutex::new(RecordWrites::default()),
+			deferred_index_builds: std::sync::Mutex::new(HashSet::new()),
+			pending_index_build_starts: Mutex::new(Vec::new()),
 		}
 	}
 
@@ -1025,6 +1179,91 @@ impl Transaction {
 		});
 	}
 
+	/// Whether this transaction has staged record-data writes to `tb`.
+	///
+	/// `DEFINE INDEX` reads this (before staging anything the build depends
+	/// on) to decide whether the build must be deferred until after commit:
+	/// the index builder scans the table with separate transactions that
+	/// cannot see this transaction's uncommitted records. Untracked writes
+	/// (opaque byte keys, range/prefix deletes with no record span)
+	/// conservatively count for every table.
+	pub(crate) fn has_record_writes_for(
+		&self,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: &TableName,
+	) -> bool {
+		let rw = self.record_writes.lock().unwrap_or_else(|e| e.into_inner());
+		rw.untracked || rw.tables.get(&(ns, db)).is_some_and(|tables| tables.contains(tb))
+	}
+
+	/// Record that a typed write touched a table's record span.
+	fn note_record_write(&self, table: &crate::kvs::RecordTableRef<'_>) {
+		self.record_writes
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.note_table(table.ns, table.db, table.tb);
+	}
+
+	/// Record a write whose key type carries no record span — an opaque byte
+	/// key, or a range/prefix delete that may cover record data.
+	#[inline]
+	fn note_untracked_write(&self) {
+		self.record_writes.lock().unwrap_or_else(|e| e.into_inner()).note_untracked();
+	}
+
+	/// Register a deferred index build to start after this transaction commits.
+	///
+	/// The caller has staged the index definition and its `Building` durable
+	/// state in this transaction. Also records the index in the per-transaction
+	/// deferred set so writes to it later in this same transaction skip index
+	/// maintenance (the post-commit initial scan indexes them). Discarded on
+	/// cancel or commit failure, together with the staged state.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) async fn register_deferred_index_build_start(
+		&self,
+		builder: IndexBuilder,
+		ctx: FrozenContext,
+		opt: Options,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: TableName,
+		table_id: TableId,
+		ix: Arc<IndexDefinition>,
+	) {
+		self.deferred_index_builds.lock().unwrap_or_else(|e| e.into_inner()).insert(
+			CachedIndexBuildReservationKey {
+				ns,
+				db,
+				tb: tb.clone(),
+				ix: ix.index_id,
+			},
+		);
+		self.pending_index_build_starts.lock().await.push(PendingIndexBuildStart {
+			builder,
+			ctx,
+			opt,
+			ns,
+			db,
+			tb,
+			table_id,
+			ix,
+		});
+	}
+
+	/// Whether this transaction deferred the build of the given index.
+	///
+	/// Writers use this to skip admission and index maintenance for an index
+	/// whose definition and `Building` state are staged in this very
+	/// transaction: no durable admission ticket can exist for them, and the
+	/// deferred post-commit scan indexes every row this transaction stages.
+	///
+	/// Synchronous on purpose: it runs once per indexed mutation, inside
+	/// futures that every statement execution chain embeds.
+	pub(crate) fn is_deferred_index_build(&self, key: &CachedIndexBuildReservationKey) -> bool {
+		self.deferred_index_builds.lock().unwrap_or_else(|e| e.into_inner()).contains(key)
+	}
+
 	/// Check if the transaction is local or remote
 	pub fn is_local(&self) -> bool {
 		self.local
@@ -1065,6 +1304,7 @@ impl Transaction {
 		let cleanup_result = self.cleanup_uncommitted_index_builds().await;
 		let release_result = self.release_index_build_reservations().await;
 		self.discard_index_builder_aborts().await;
+		self.discard_index_build_starts().await;
 		self.emit_transaction_event(Outcome::from(&result));
 		result?;
 		cleanup_result?;
@@ -1103,6 +1343,7 @@ impl Transaction {
 			let cleanup_result = self.cleanup_uncommitted_index_builds().await;
 			let release_result = self.release_index_build_reservations().await;
 			self.discard_index_builder_aborts().await;
+			self.discard_index_build_starts().await;
 			// Classify the commit failure so the surrealdb.transaction.* metric
 			// family can carry an `error_class` attribute. `e` is a concrete
 			// `kvs::Error` here -- the transactor's `commit` returns
@@ -1141,6 +1382,7 @@ impl Transaction {
 		}
 		self.discard_uncommitted_index_builds().await;
 		self.run_index_builder_aborts().await;
+		self.run_index_build_starts().await;
 		if self.trigger_async_event.load(Ordering::Relaxed) {
 			// Notify after commit so queued events are visible to workers.
 			self.async_event_trigger.notify_one();
@@ -1257,6 +1499,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let key_bytes = key.len() as u64;
 		self.tr.del(key).await.map_err(Error::from)?;
@@ -1271,6 +1520,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let key_bytes = key.len() as u64;
 		let chk = chk.map(|v| v.kv_encode_value()).transpose()?;
@@ -1288,11 +1544,33 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = rng.start.record_table() {
+			self.note_record_write(&table);
+		} else {
+			// A non-record range may still cover record spans (e.g. a whole
+			// table or database prefix): conservatively count as a record
+			// write to every table.
+			self.note_untracked_write();
+		}
 		let beg = rng.start.encode_key()?;
 		let end = rng.end.encode_key()?;
 		self.tr.delr(beg..end).await.map_err(Error::from)?;
 		// Range/prefix deletes don't report the number of affected keys or
 		// their byte size.
+		self.metrics.record_del(0, 0);
+		Ok(())
+	}
+
+	/// Delete a range of keys the caller asserts contains no table record data.
+	///
+	/// Unlike [`Self::delr`], this does not mark the transaction as having
+	/// record writes. Reserved for spans that hold only index/meta keys and
+	/// are deleted inside user schema transactions — the index build-queue
+	/// retirement (`!bg`/`!bp`/`!br`) and sequence state — where the
+	/// conservative marking would needlessly defer a later `DEFINE INDEX`
+	/// in the same transaction to an asynchronous post-commit build.
+	pub(crate) async fn delr_record_free(&self, rng: Range<Key>) -> Result<()> {
+		self.tr.delr(rng).await.map_err(Error::from)?;
 		self.metrics.record_del(0, 0);
 		Ok(())
 	}
@@ -1306,6 +1584,14 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else {
+			// A non-record prefix may still cover record spans (e.g. a whole
+			// table or database prefix): conservatively count as a record
+			// write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		self.tr.delp(key).await.map_err(Error::from)?;
 		self.metrics.record_del(0, 0);
@@ -1318,6 +1604,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let key_bytes = key.len() as u64;
 		self.tr.clr(key).await.map_err(Error::from)?;
@@ -1332,6 +1625,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let key_bytes = key.len() as u64;
 		let chk = chk.map(|v| v.kv_encode_value()).transpose()?;
@@ -1349,6 +1649,14 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = rng.start.record_table() {
+			self.note_record_write(&table);
+		} else {
+			// A non-record range may still cover record spans (e.g. a whole
+			// table or database prefix): conservatively count as a record
+			// write to every table.
+			self.note_untracked_write();
+		}
 		let beg = rng.start.encode_key()?;
 		let end = rng.end.encode_key()?;
 		self.tr.clrr(beg..end).await.map_err(Error::from)?;
@@ -1365,6 +1673,14 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else {
+			// A non-record prefix may still cover record spans (e.g. a whole
+			// table or database prefix): conservatively count as a record
+			// write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		self.tr.clrp(key).await.map_err(Error::from)?;
 		self.metrics.record_del(0, 0);
@@ -1518,6 +1834,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let val = val.kv_encode_value()?;
 		let key_bytes = key.len() as u64;
@@ -1533,6 +1856,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let val = val.kv_encode_value()?;
 		let key_bytes = key.len() as u64;
@@ -1553,6 +1883,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let val = val.kv_encode_value()?;
 		let chk = chk.map(|v| v.kv_encode_value()).transpose()?;
@@ -1569,6 +1906,13 @@ impl Transaction {
 	where
 		K: KVKey + Debug,
 	{
+		if let Some(table) = key.record_table() {
+			self.note_record_write(&table);
+		} else if K::OPAQUE {
+			// Opaque byte keys carry no span information: conservatively
+			// count as a record write to every table.
+			self.note_untracked_write();
+		}
 		let key = key.encode_key()?;
 		let val = val.kv_encode_value()?;
 		let key_bytes = key.len() as u64;
@@ -1836,17 +2180,23 @@ impl Transaction {
 
 	/// Set a new save point on the transaction.
 	pub async fn new_save_point(&self) -> Result<()> {
-		Ok(self.inner.new_save_point().await.map_err(Error::from)?)
+		self.inner.new_save_point().await.map_err(Error::from)?;
+		self.record_writes.lock().unwrap_or_else(|e| e.into_inner()).push_save_point();
+		Ok(())
 	}
 
 	/// Release the last save point.
 	pub async fn release_last_save_point(&self) -> Result<()> {
-		Ok(self.inner.release_last_save_point().await.map_err(Error::from)?)
+		self.inner.release_last_save_point().await.map_err(Error::from)?;
+		self.record_writes.lock().unwrap_or_else(|e| e.into_inner()).release_save_point();
+		Ok(())
 	}
 
 	/// Rollback to the last save point.
 	pub async fn rollback_to_save_point(&self) -> Result<()> {
-		Ok(self.inner.rollback_to_save_point().await.map_err(Error::from)?)
+		self.inner.rollback_to_save_point().await.map_err(Error::from)?;
+		self.record_writes.lock().unwrap_or_else(|e| e.into_inner()).rollback_save_point();
+		Ok(())
 	}
 
 	// --------------------------------------------------
@@ -2140,6 +2490,31 @@ impl Transaction {
 	/// references the index, and the build must keep running.
 	async fn discard_index_builder_aborts(&self) {
 		self.pending_index_builder_aborts.lock().await.clear();
+	}
+
+	/// Launch every deferred index build queued by this transaction.
+	///
+	/// Runs on the commit path once the staged index definition, its
+	/// `Building` durable state, and the records it must scan are all
+	/// durable. Each start only spawns the builder task, so commit latency
+	/// is unaffected.
+	async fn run_index_build_starts(&self) {
+		let starts = {
+			let mut pending = self.pending_index_build_starts.lock().await;
+			std::mem::take(&mut *pending)
+		};
+		for start in starts {
+			start.start();
+		}
+	}
+
+	/// Discard queued deferred index-build starts without running them.
+	///
+	/// Invoked on the cancel path and on commit failure: the staged index
+	/// definition and `Building` state vanish with the transaction, so there
+	/// is nothing to build.
+	async fn discard_index_build_starts(&self) {
+		self.pending_index_build_starts.lock().await.clear();
 	}
 
 	// --------------------------------------------------

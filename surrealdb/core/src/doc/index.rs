@@ -115,6 +115,13 @@ impl Document {
 				// index asynchronously, we don't index the document and let the index builder
 				// do it later.
 				ConsumeResult::Enqueued => return Ok(()),
+				// This transaction deferred the index's build: nothing was
+				// queued, so no replay will ever reference the record. The
+				// post-commit initial scan indexes the committed state; skip.
+				// (On this branch, unlike main, there is no shared doc-ID
+				// deferral to sidestep — the distinct variant is kept for
+				// parity with the mainline fix.)
+				ConsumeResult::SkippedDeferredBuild => return Ok(()),
 				// The index builder is done, the index has been built; we can proceed normally
 				ConsumeResult::Ignored(o, n) => (o, n),
 				// The definition was retired after it was read from a cache.

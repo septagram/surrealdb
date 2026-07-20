@@ -25,6 +25,25 @@
 //! is never replayed — `REBUILD INDEX` wipes it and rescans the table.
 //! Legacy `!ig`/`!ip` appendings are still drained for committed work from older
 //! code paths, but new writes use the durable queue.
+//!
+//! # Deferred builds
+//!
+//! A `DEFINE INDEX` executed in a transaction that has already staged record
+//! writes to the indexed table (e.g. `{ CREATE ...; DEFINE INDEX ...; }`)
+//! cannot build inline: the builder's scan and replay transactions can never
+//! observe the defining transaction's uncommitted records, and those records
+//! only become visible once that transaction commits — after the statement
+//! has returned. (Staged writes to *other* tables don't defer the build: the
+//! initial scan only reads the indexed table's record span.) The
+//! statement instead stages the `!bs` state as `Building` with no owner,
+//! atomically with the definition and the data, and registers a post-commit
+//! start that launches the normal build (whether or not `CONCURRENTLY` was
+//! requested). An ownerless active generation counts as expired for takeover,
+//! so the stalled-build resume scan adopts the build if the process dies
+//! before the start runs. Until the build publishes `Online`, queries fall
+//! back to table scans and remain correct. Writes later in the defining
+//! transaction skip index maintenance entirely (the initial scan will index
+//! them); the transaction tracks those indexes in its deferred set.
 
 mod admission;
 mod builder;
@@ -40,7 +59,7 @@ pub(crate) use builder::{IndexBuilder, IndexMutation};
 pub(crate) use replay::{Appending, PrimaryAppending, PrimaryAppendingTicket};
 pub(crate) use state::{
 	IndexBuildPhase, IndexBuildReportStatus, IndexBuildReservation, IndexBuildState,
-	filter_online_indexes, index_building_info, retire_durable_index,
+	filter_online_indexes, index_building_info, retire_durable_index, stage_deferred_index_build,
 };
 
 use crate::kvs::tx::IndexBuildReservationRelease;
@@ -130,6 +149,13 @@ pub(crate) enum ConsumeResult {
 	Ignored(Option<Vec<crate::val::Value>>, Option<Vec<crate::val::Value>>),
 	/// The index definition came from a stale cache after catalog retirement.
 	Retired,
+	/// The write was intentionally skipped: this transaction deferred the
+	/// index's build, and the post-commit initial scan indexes the committed
+	/// state instead. Nothing was queued, so — unlike [`Self::Enqueued`] — no
+	/// replay will ever reference the record: a delete must still drop the
+	/// shared doc-ID mapping through the normal central removal rather than
+	/// defer it to the build's reclaim sweep.
+	SkippedDeferredBuild,
 }
 
 pub(crate) type BatchId = u32;

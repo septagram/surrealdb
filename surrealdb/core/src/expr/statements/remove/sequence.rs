@@ -60,10 +60,13 @@ impl RemoveSequenceStatement {
 			seq.sequence_removed(ns, db, &name).await;
 		}
 		// Delete any sequence records
+		// Record-free spans: sequence state holds no table record data, so
+		// these deletes must not mark the transaction as having record writes
+		// (which would needlessly defer a later `DEFINE INDEX` in it).
 		let ba_range = Prefix::new_ba_range(ns, db, &sq.name)?;
-		txn.delr(ba_range).await?;
+		txn.delr_record_free(ba_range).await?;
 		let st_range = Prefix::new_st_range(ns, db, &sq.name)?;
-		txn.delr(st_range).await?;
+		txn.delr_record_free(st_range).await?;
 		// Delete the definition
 		let key = Sq::new(ns, db, &name);
 		txn.del(&key).await?;

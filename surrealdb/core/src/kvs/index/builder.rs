@@ -307,8 +307,27 @@ impl IndexBuilder {
 		ix: Arc<IndexDefinition>,
 		blocking: bool,
 	) -> Result<Option<Receiver<Result<()>>>> {
-		ix.expect_not_prepare_remove()?;
 		let (ns, db) = ctx.expect_ns_db_ids(&opt).await?;
+		self.build_with_ids(ctx, opt, ns, db, tb, ix, blocking).await
+	}
+
+	/// [`Self::build`] with pre-resolved namespace/database ids.
+	///
+	/// Deferred build starts run after their defining transaction has
+	/// committed, on a detached context with no transaction to resolve the
+	/// ids through — they were captured when the statement executed.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) async fn build_with_ids(
+		&self,
+		ctx: &FrozenContext,
+		opt: Options,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: TableId,
+		ix: Arc<IndexDefinition>,
+		blocking: bool,
+	) -> Result<Option<Receiver<Result<()>>>> {
+		ix.expect_not_prepare_remove()?;
 		let key = Arc::new(IndexKey::new(ns, db, &ix.table_name, ix.index_id));
 		let (rcv, sdr) = if blocking {
 			let (s, r) = channel();
@@ -331,6 +350,95 @@ impl IndexBuilder {
 				Ok(None)
 			}
 			BuildStart::RemoteOwner(_) => Ok(None),
+		}
+	}
+
+	/// Launch a build that was deferred by its defining transaction.
+	///
+	/// `DEFINE INDEX` defers the build when its transaction has already
+	/// staged record writes: the statement stages the definition and an
+	/// ownerless `Building` state, and the commit path calls this once they
+	/// are durable. The spawned task re-checks the catalog first — the same
+	/// transaction may have removed or redefined the index after deferring
+	/// it — and then performs an **adopt-only** takeover of the staged
+	/// ownerless generation. It never creates a fresh generation: if the
+	/// staged state is gone, owned, or terminal, a racer has retired or
+	/// taken over the work and there is nothing left to do. Failures are
+	/// logged only: the staged state remains adoptable by the resume scan.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn start_deferred_build(
+		self,
+		ctx: FrozenContext,
+		opt: Options,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: TableName,
+		table_id: TableId,
+		ix: Arc<IndexDefinition>,
+	) {
+		spawn(async move {
+			if let Err(err) =
+				self.run_deferred_build(&ctx, opt, ns, db, &tb, table_id, Arc::clone(&ix)).await
+			{
+				warn!(
+					index = %ix.name,
+					table = %ix.table_name,
+					error = %err,
+					"deferred index build failed to start after commit; the \
+					 stalled-build resume scan will adopt it"
+				);
+			}
+		});
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	async fn run_deferred_build(
+		&self,
+		ctx: &FrozenContext,
+		opt: Options,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: &TableName,
+		table_id: TableId,
+		ix: Arc<IndexDefinition>,
+	) -> Result<()> {
+		ix.expect_not_prepare_remove()?;
+		// Fast-path skip when the catalog no longer references this exact
+		// index: the defining transaction removed or redefined it after
+		// deferring this build (a redefinition allocates a fresh index id and
+		// registers its own start). This check is unfenced — the adopt-only
+		// takeover below is what makes a lost race safe.
+		let tx = self
+			.tf
+			.transaction(TransactionType::Read, Optimistic, ctx.try_get_sequences()?.clone())
+			.await?;
+		let current = catch!(tx, tx.get_tb_index(ns, db, tb, &ix.name, None).await);
+		tx.cancel().await?;
+		let still_current =
+			current.is_some_and(|cur| cur.index_id == ix.index_id && !cur.prepare_remove);
+		if !still_current {
+			return Ok(());
+		}
+		// Skip if a builder task for this index is already running locally.
+		let key = Arc::new(IndexKey::new(ns, db, &ix.table_name, ix.index_id));
+		if let Some(existing) = self.indexes.read().await.get(&key)
+			&& !existing.is_finished()
+		{
+			return Ok(());
+		}
+		// Adopt-only takeover of the staged ownerless generation, CAS-fenced
+		// against every racer. `takeover_expired_build_state` never creates a
+		// generation: it returns `None` when the state is missing (retired by
+		// a racing `REMOVE`/`OVERWRITE` after the catalog check), no longer
+		// expired (owned by a live adopter such as the resume scan), or
+		// terminal (`Online`/`Error`, an adopter already finished) — in all
+		// of those cases the deferred work has been retired or taken over,
+		// and starting a fresh generic build here could resurrect a retired
+		// index id or rebuild an index that is already ready.
+		let building = Arc::new(Building::new(ctx, self.tf.clone(), opt, table_id, ix, key)?);
+		match building.takeover_expired_build_state().await? {
+			Some(acquired) => self.start_acquired_building(building, acquired, None).await,
+			None => Ok(()),
 		}
 	}
 

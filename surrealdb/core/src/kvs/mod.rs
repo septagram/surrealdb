@@ -65,7 +65,9 @@ pub use ds::{
 };
 pub use err::{Error, Result};
 pub use into::IntoBytes;
-pub(crate) use key::{KVKey, KVValue, impl_kv_key_storekey, impl_kv_value_revisioned};
+pub(crate) use key::{
+	KVKey, KVValue, RecordTableRef, impl_kv_key_storekey, impl_kv_value_revisioned,
+};
 pub use timestamp::{
 	BoxTimeStamp, BoxTimeStampImpl, HlcTimeStamp, HlcTimeStampImpl, IncTimeStampImpl,
 	MAX_TIMESTAMP_BYTES, TimeStamp, TimeStampImpl,
