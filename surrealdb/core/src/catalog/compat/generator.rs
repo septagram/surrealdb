@@ -1102,6 +1102,26 @@ fn generator_v3_1_1() {
 	run_generator("v3_1_1", "3.1.1");
 }
 
+/// Generate fixture bytes for the 3.2.2 wire format snapshot. Run with:
+///
+/// ```text
+/// cargo test -p surrealdb-core --lib \
+///     catalog::compat::generator::generator_v3_2_2 -- --ignored --nocapture
+/// ```
+///
+/// Copy the output into `v3_2_2.rs`, then paste the printed hash into
+/// the assertion in `test_v3_2_2_remains_unchanged` below.
+///
+/// 3.2.2 bumped `TableDefinition` to revision 3 for the transactional
+/// `cache_lives_ts` live-query cache key, so only the `TABLE_*` fixtures
+/// re-encode (their leading revision byte changes `2` -> `3`); every other
+/// fixture is byte-identical to 3.1.1.
+#[test]
+#[ignore]
+fn generator_v3_2_2() {
+	run_generator("v3_2_2", "3.2.2");
+}
+
 #[test]
 fn test_v3_0_0_beta_1_remains_unchanged() {
 	use sha2::{Digest, Sha256};
@@ -1175,4 +1195,23 @@ fn test_v3_1_1_remains_unchanged() {
 	let hash = Sha256::digest(v3_1_1);
 	let hash_str = hex::encode(hash);
 	assert_eq!(hash_str, "f7d260a6bbd3d9efba605f550b009c1c6ad3a82fab79578bf3611b1acc8802ae");
+}
+
+#[test]
+fn test_v3_2_2_remains_unchanged() {
+	use sha2::{Digest, Sha256};
+
+	// Read the v3_2_2.rs file, hash it and assert on the hash.
+	//
+	// v3_2_2 captures the wire format after `TableDefinition` bumped to
+	// revision 3 for the transactional `cache_lives_ts` live-query cache key.
+	// Only the `TABLE_*` fixtures re-encode (their leading revision byte changes
+	// `2` -> `3`); every other fixture is byte-identical to 3.1.1.
+	//
+	// NEVER modify v3_2_2.rs after commit; if a real format change ships,
+	// capture a new version snapshot rather than rotating this hash.
+	let v3_2_2 = include_bytes!("v3_2_2.rs");
+	let hash = Sha256::digest(v3_2_2);
+	let hash_str = hex::encode(hash);
+	assert_eq!(hash_str, "e6614c109b784f5392fb7fca059370311067e8e6d17e5a3d2d3c97dc4e79aa53");
 }
