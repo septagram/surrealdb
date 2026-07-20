@@ -195,49 +195,6 @@ pub(crate) async fn index_building_info(
 	Ok(out.into())
 }
 
-/// Stage the build state for a deferred index build in the caller's transaction.
-///
-/// Used by `DEFINE INDEX` when its transaction already contains staged record
-/// writes: the builder scans the table with separate transactions, which can
-/// never see those uncommitted records, so the build must wait for the commit.
-/// The staged state commits atomically with the index definition and the
-/// records, so from the moment the index is visible it is `Building`: the
-/// planner does not use it (queries fall back to scans and stay correct) and
-/// admission queues concurrent writers' mutations for replay. The state has no
-/// owner, making the generation immediately adoptable ([`build_owner_expired`])
-/// by the post-commit build start — or by the stalled-build resume scan if the
-/// process dies first. On rollback the staged state vanishes with the
-/// transaction, leaving nothing to clean up.
-pub(crate) async fn stage_deferred_index_build(
-	tx: &Transaction,
-	ns: NamespaceId,
-	db: DatabaseId,
-	tb: &TableName,
-	ix: IndexId,
-) -> Result<()> {
-	let ikb = IndexKeyBase::new(ns, db, tb.clone(), ix);
-	let now = Utc::now();
-	let state = IndexBuildState {
-		// A (re)defined index always gets a fresh internal id, so no durable
-		// state can exist for this `!bs` key: this is generation 1, and the
-		// `put` (insert-only) write guards that invariant.
-		generation: 1,
-		phase: IndexBuildPhase::Building,
-		owner: None,
-		next_ticket: 0,
-		initial_complete: false,
-		updated_at: now,
-		owner_heartbeat_at: None,
-		error: None,
-		report_status: Some(IndexBuildReportStatus::Started),
-		initial: None,
-		updated: None,
-		pending: None,
-		initial_cursor: None,
-	};
-	tx.put(&ikb.new_bs_key(), &state).await
-}
-
 /// Delete durable build state for an index that is removed or overwritten.
 ///
 /// The delete is staged in the caller's schema transaction so durable state and
@@ -267,13 +224,9 @@ pub(super) async fn delete_durable_build_queues(
 	tx: &Transaction,
 	ikb: &IndexKeyBase,
 ) -> Result<()> {
-	// Record-free spans: these `!bg`/`!bp`/`!br` deletes run inside user
-	// schema transactions (e.g. `REMOVE INDEX`), and marking them as record
-	// writes would needlessly defer any later `DEFINE INDEX` in the same
-	// transaction.
-	tx.delr_record_free(ikb.new_bg_all_generations_range()?).await?;
-	tx.delr_record_free(ikb.new_bp_all_generations_range()?).await?;
-	tx.delr_record_free(ikb.new_br_all_generations_range()?).await?;
+	tx.delr(ikb.new_bg_all_generations_range()?).await?;
+	tx.delr(ikb.new_bp_all_generations_range()?).await?;
+	tx.delr(ikb.new_br_all_generations_range()?).await?;
 	Ok(())
 }
 
@@ -318,16 +271,6 @@ pub(super) fn is_condition_not_met(err: &anyhow::Error) -> bool {
 }
 
 pub(super) fn build_owner_expired(state: &IndexBuildState, now: DateTime<Utc>) -> bool {
-	// An active state with no owner has never been claimed by a builder
-	// task: it was staged by a deferred `DEFINE INDEX` commit (see
-	// [`stage_deferred_index_build`]). There is no lease to respect, so it
-	// is immediately adoptable — by the post-commit start, by a blocking
-	// statement takeover, or by the stalled-build resume scan. Builder
-	// tasks always stamp themselves as owner while in `Building`/`Closing`,
-	// so this cannot release a live builder's generation.
-	if state.owner.is_none() {
-		return true;
-	}
 	state.owner_heartbeat_at.unwrap_or(state.updated_at)
 		+ chrono::Duration::seconds(BUILD_OWNER_LEASE_SECS)
 		<= now

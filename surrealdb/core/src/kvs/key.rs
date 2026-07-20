@@ -5,37 +5,10 @@ use std::fmt::Debug;
 use anyhow::{Context, Result};
 use roaring::{RoaringBitmap, RoaringTreemap};
 
-/// The table record span a key mutation touches, when it touches one.
-///
-/// Returned by [`KVKey::record_table`] for keys inside a table's record
-/// span — the keys an index build's initial scan reads. `Transaction` uses
-/// this to track which tables have staged record writes, which decides
-/// whether a `DEFINE INDEX` in the same transaction must defer its build
-/// until after commit (the build scans with separate transactions and
-/// cannot see this transaction's uncommitted records).
-pub(crate) struct RecordTableRef<'a> {
-	pub ns: crate::catalog::NamespaceId,
-	pub db: crate::catalog::DatabaseId,
-	pub tb: &'a crate::val::TableName,
-}
-
 /// KVKey is a trait that defines a key for the key-value store.
 pub(crate) trait KVKey: Debug + Sized {
 	/// The associated value type for this key.
 	type ValueType: KVValue;
-
-	/// Whether this key type is an opaque byte key (`Vec<u8>`/`String`)
-	/// whose span cannot be classified. Write paths treat opaque point
-	/// writes as record writes to every table, conservatively (see
-	/// [`Self::record_table`]).
-	const OPAQUE: bool = false;
-
-	/// The table record span this key belongs to, if any (see
-	/// [`RecordTableRef`]). The default (`None`) marks the key as not being
-	/// table record data; record keys override it.
-	fn record_table(&self) -> Option<RecordTableRef<'_>> {
-		None
-	}
 
 	/// Encodes the key into a byte vector.
 	fn encode_key(&self) -> Result<Vec<u8>>;
@@ -71,8 +44,6 @@ pub(crate) use impl_kv_key_storekey;
 impl KVKey for Vec<u8> {
 	type ValueType = Vec<u8>;
 
-	const OPAQUE: bool = true;
-
 	#[inline]
 	fn encode_key(&self) -> Result<Vec<u8>> {
 		Ok(self.clone())
@@ -84,8 +55,6 @@ impl KVKey for Vec<u8> {
 
 impl KVKey for String {
 	type ValueType = Vec<u8>;
-
-	const OPAQUE: bool = true;
 
 	#[inline]
 	fn encode_key(&self) -> Result<Vec<u8>> {

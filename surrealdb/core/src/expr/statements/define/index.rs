@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::DefineKind;
 use crate::catalog::providers::TableProvider;
 use crate::catalog::{Index, IndexDefinition, TableDefinition, TableId};
-use crate::ctx::{Context, FrozenContext};
+use crate::ctx::FrozenContext;
 use crate::dbs::Options;
 use crate::doc::CursorDoc;
 use crate::err::Error;
@@ -16,7 +16,7 @@ use crate::expr::parameterize::{expr_to_ident, exprs_to_fields};
 use crate::expr::{Base, Expr, FlowResultExt, Idiom, Literal, Part};
 use crate::iam::{Action, ResourceKind};
 use crate::kvs::Transaction;
-use crate::kvs::index::{IndexBuilder, retire_durable_index, stage_deferred_index_build};
+use crate::kvs::index::{IndexBuilder, retire_durable_index};
 use crate::val::{TableName, Value};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -67,19 +67,6 @@ impl DefineIndexStatement {
 		// Ensure the table exists
 		let (ns, db) = opt.ns_db()?;
 		let tb = txn.get_or_add_tb(Some(ctx), ns, db, &table_name, None).await?;
-
-		// Read before this statement stages anything the build depends on
-		// (in particular before an OVERWRITE retires the previous index,
-		// whose raw range-deletes are untracked): when the transaction
-		// already contains record writes to the indexed table (e.g. a
-		// `{ CREATE ...; DEFINE INDEX ...; }` block), the build must be
-		// deferred until after commit. The builder scans the table with
-		// separate transactions, which can never see this transaction's
-		// uncommitted records — a build started now would publish an index
-		// that silently misses every row staged before this statement.
-		// Writes to other tables don't matter: the build only reads this
-		// table's record span.
-		let defer_build = txn.has_record_writes_for(tb.namespace_id, tb.database_id, &tb.name);
 
 		// Check if the definition exists
 		let existing =
@@ -229,31 +216,6 @@ impl DefineIndexStatement {
 		refresh_table_index_cache(ctx, &txn, ns, db, &tb).await?;
 		let index_builder =
 			ctx.get_index_builder().ok_or_else(|| Error::unreachable("No Index Builder"))?;
-		if defer_build {
-			// This transaction already staged record writes, which no build
-			// running now could observe (and a blocking build could never
-			// wait for: they only become durable when this transaction
-			// commits, after this statement returns). Stage the durable
-			// build state as `Building` — atomically with the definition and
-			// the data, so queries skip the index and stay correct — and
-			// start the real build, blocking or `CONCURRENTLY` alike, once
-			// the transaction has committed. On rollback everything staged
-			// here vanishes with the transaction.
-			stage_deferred_index_build(&txn, tb.namespace_id, tb.database_id, &tb.name, index_id)
-				.await?;
-			txn.register_deferred_index_build_start(
-				index_builder.clone(),
-				Context::new_concurrent(ctx).freeze(),
-				opt.clone(),
-				tb.namespace_id,
-				tb.database_id,
-				tb.name.clone(),
-				tb.table_id,
-				index_def.into(),
-			)
-			.await;
-			return Ok(Value::None);
-		}
 		txn.register_uncommitted_index_build_cleanup(
 			index_builder.clone(),
 			index_builder.transaction_factory(),

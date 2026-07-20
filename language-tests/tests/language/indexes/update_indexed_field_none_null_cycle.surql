@@ -10,13 +10,6 @@ reason = "UNIQUE index on a field must stay consistent when UPDATE cycles that f
 [[test.results]]
 value = "'OK'"
 
-# DEFINE INDEX (separate statement over committed rows: the synchronous
-# build is populated and ready before the UPDATE cycle starts; inside the
-# block the build would be deferred until after commit and the UPDATEs
-# would race it — see issue #637)
-[[test.results]]
-value = "NONE"
-
 [[test.results]]
 value = "[{ k: 'a', v: 10 }, { k: 'b', v: 20 }, { k: 'c', v: 30 }]"
 
@@ -51,9 +44,9 @@ value = "[{ k: 'a', v: 15 }, { k: 'b', v: 20 }, { k: 'c', v: 30 }]"
 	CREATE t:a SET v = 10, k = 'a';
 	CREATE t:b SET v = 20, k = 'b';
 	CREATE t:c SET v = 30, k = 'c';
+	DEFINE INDEX OVERWRITE t_v ON t FIELDS v UNIQUE;
 	RETURN "OK";
 };
-DEFINE INDEX OVERWRITE t_v ON t FIELDS v UNIQUE;
 
 -- Baseline indexed values
 RETURN (SELECT k, v FROM t ORDER BY k);
