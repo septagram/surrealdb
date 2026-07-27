@@ -35,6 +35,8 @@ mod rpc_session_test;
 mod snapshot;
 #[cfg(feature = "kv-mem")]
 mod tx_cache_test;
+#[cfg(feature = "kv-mem")]
+mod write_guard_test;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Kvs {
