@@ -182,6 +182,7 @@ pub enum Category {
 	/// crate::key::table::bs                /*{ns}*{db}*{tb}!bs{ix}
 	IndexBuildState,
 	/// crate::key::table::br                /*{ns}*{db}*{tb}!br{ix}{generation}{ticket}
+	IndexBuildTicketCounter,
 	IndexBuildReservation,
 	/// crate::key::table::bg                /*{ns}*{db}*{tb}!bg{ix}{generation}{ticket}
 	IndexBuildAppending,
@@ -303,6 +304,7 @@ impl Display for Category {
 			Self::Reclaim => "Reclaim",
 			Self::IndexCountState => "IndexCountState",
 			Self::IndexBuildState => "IndexBuildState",
+			Self::IndexBuildTicketCounter => "IndexBuildTicketCounter",
 			Self::IndexBuildReservation => "IndexBuildReservation",
 			Self::IndexBuildAppending => "IndexBuildAppending",
 			Self::IndexBuildPrimaryAppending => "IndexBuildPrimaryAppending",

@@ -284,9 +284,11 @@ struct PendingUncommittedIndexBuild {
 
 impl PendingUncommittedIndexBuild {
 	async fn cleanup_once(&self) -> Result<()> {
-		// Stop the local task first. The durable `!bs` delete below is still the
-		// cross-node fence: any in-flight builder write has to read/update that key
-		// in the same transaction before it can commit index data.
+		// Stop the local task first. The durable `!bs` delete below is the
+		// cross-node fence against the builder: any in-flight builder write has to
+		// read/update that key in the same transaction before it can commit index
+		// data. Writer admission is fenced separately, by the `!bt` counter range
+		// deleted alongside it.
 		if let Err(err) = self.builder.remove_index(self.ns, self.db, &self.tb, self.ix).await {
 			tracing::warn!(
 				target: "surrealdb::core::kvs::tx",
@@ -305,6 +307,7 @@ impl PendingUncommittedIndexBuild {
 			tx.tr.delr(ikb.new_bg_all_generations_range()?).await.map_err(Error::from)?;
 			tx.tr.delr(ikb.new_bp_all_generations_range()?).await.map_err(Error::from)?;
 			tx.tr.delr(ikb.new_br_all_generations_range()?).await.map_err(Error::from)?;
+			tx.tr.delr(ikb.new_bt_all_generations_range()?).await.map_err(Error::from)?;
 			tx.tr.delp(index_prefix).await.map_err(Error::from)?;
 			tx.tr.commit().await.map_err(Error::from)?;
 			Ok(())

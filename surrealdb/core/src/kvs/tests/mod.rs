@@ -23,6 +23,7 @@ macro_rules! include_tests {
 #[cfg(feature = "kv-rocksdb")]
 mod metrics;
 
+mod conditional_write_fences;
 mod multireader;
 mod multiwriter_different_keys;
 mod multiwriter_same_keys_allow;
@@ -89,6 +90,7 @@ mod mem {
 		raw,
 		snapshot,
 		multireader,
+		conditional_write_fences,
 		multiwriter_different_keys,
 		multiwriter_same_keys_conflict,
 	);
@@ -121,6 +123,7 @@ mod rocksdb {
 		raw,
 		snapshot,
 		multireader,
+		conditional_write_fences,
 		multiwriter_different_keys,
 		multiwriter_same_keys_conflict,
 		metrics
@@ -154,6 +157,7 @@ mod surrealkv {
 		raw,
 		snapshot,
 		multireader,
+		conditional_write_fences,
 		multiwriter_different_keys,
 		multiwriter_same_keys_conflict,
 	);
@@ -188,6 +192,7 @@ mod tikv {
 		raw,
 		snapshot,
 		multireader,
+		conditional_write_fences,
 		multiwriter_different_keys,
 		multiwriter_same_keys_allow,
 	);

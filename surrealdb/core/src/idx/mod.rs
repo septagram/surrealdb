@@ -70,6 +70,7 @@ use crate::key::table::bg::Bg;
 use crate::key::table::bp::Bp;
 use crate::key::table::br::Br;
 use crate::key::table::bs::Bs;
+use crate::key::table::bt::Bt;
 use crate::kvs::index::{
 	AppendingId, BatchId, BuildGeneration, BuildTicket, BuildTicketMutationSeq,
 };
@@ -350,6 +351,21 @@ impl IndexKeyBase {
 	/// Key storing durable build state for this table index.
 	pub(crate) fn new_bs_key(&self) -> Bs<'_> {
 		Bs::new(self.0.ns, self.0.db, &self.0.tb, self.0.ix)
+	}
+
+	/// Key storing the writer-admission ticket counter for a build generation.
+	pub(crate) fn new_bt_key(&self, generation: BuildGeneration) -> Bt<'_> {
+		Bt::new(self.0.ns, self.0.db, &self.0.tb, self.0.ix, generation)
+	}
+
+	/// Range covering the ticket counter of one build generation.
+	pub(crate) fn new_bt_range(&self, generation: BuildGeneration) -> Result<Range<Key>> {
+		Bt::range(self.0.ns, self.0.db, &self.0.tb, self.0.ix, generation)
+	}
+
+	/// Range covering the ticket counters of every generation of this index.
+	pub(crate) fn new_bt_all_generations_range(&self) -> Result<Range<Key>> {
+		Bt::all_generations_range(self.0.ns, self.0.db, &self.0.tb, self.0.ix)
 	}
 
 	/// Key storing one durable writer reservation for a build generation.

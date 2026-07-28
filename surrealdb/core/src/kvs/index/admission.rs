@@ -355,13 +355,16 @@ impl IndexBuilder {
 				// the new generation. Failing the write instead would turn a
 				// background build failure into a table-wide write outage.
 				IndexBuildPhase::Building | IndexBuildPhase::Error => {
-					let ticket = state.next_ticket;
-					let mut next = state.clone();
-					next.next_ticket = next.next_ticket.saturating_add(1);
-					next.updated_at = Utc::now();
-					// Freeze legacy fallback state before refreshing `updated_at`;
-					// writer admissions must not extend the builder lease.
-					next.owner_heartbeat_at = state.owner_heartbeat_at.or(Some(state.updated_at));
+					// A generation installed by this protocol version owns a
+					// `!bt` ticket counter, so admission never writes `!bs` and
+					// cannot invalidate the builder's in-flight batch. A build
+					// whose generation predates the counter has no `!bt` and
+					// keeps allocating from `!bs.next_ticket` until its next
+					// generation, so upgrading under an in-flight build does not
+					// change how its tickets are issued.
+					let bt = ikb.new_bt_key(state.generation);
+					let counter = tx.get(&bt, None).await?;
+					let ticket = counter.unwrap_or(state.next_ticket);
 					let reservation = IndexBuildReservation {
 						node: ctx.node_id(),
 						expires_at: Utc::now()
@@ -376,7 +379,27 @@ impl IndexBuilder {
 						reservation.kv_encode_value()?,
 					);
 					tx.set(&br, &reservation).await?;
-					let res = tx.putc(&state_key, &next, Some(&state)).await;
+					// Both allocation paths are compare-and-swaps, so a
+					// concurrent generation flip — which rewrites `!bs` and
+					// removes `!bt` after reading it — fences this admission on
+					// every backend, including the last-writer-wins ones where a
+					// blind write would not conflict.
+					let res = match counter {
+						Some(current) => {
+							tx.putc(&bt, &ticket.saturating_add(1), Some(&current)).await
+						}
+						None => {
+							let mut next = state.clone();
+							next.next_ticket = next.next_ticket.saturating_add(1);
+							next.updated_at = Utc::now();
+							// Freeze legacy fallback state before refreshing
+							// `updated_at`; writer admissions must not extend the
+							// builder lease.
+							next.owner_heartbeat_at =
+								state.owner_heartbeat_at.or(Some(state.updated_at));
+							tx.putc(&state_key, &next, Some(&state)).await
+						}
+					};
 					match res {
 						Ok(()) => {
 							tx.commit().await?;
