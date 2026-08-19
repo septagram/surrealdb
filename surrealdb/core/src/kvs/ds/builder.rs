@@ -21,6 +21,7 @@ use crate::exec::function::FunctionRegistry;
 use crate::http::HttpClient;
 use crate::idx::trees::store::IndexStores;
 use crate::kvs::cache::ds::DatastoreCache;
+use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::index::IndexBuilder;
 use crate::kvs::sequences::Sequences;
 use crate::kvs::slowlog::SlowLog;
@@ -306,6 +307,7 @@ impl Builder {
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets,
 			sequences: Sequences::new(tf, id),
+			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
 			async_event_trigger,
 			#[cfg(feature = "surrealism")]
 			surrealism_cache: Arc::new(SurrealismCache::new(config.surrealism_cache_size)),

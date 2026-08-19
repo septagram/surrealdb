@@ -106,6 +106,6 @@ pub(crate) use self::statements::{
 	InsertStatement, KillStatement, LiveStatement, RelateStatement, SelectStatement,
 	UpdateStatement, UpsertStatement,
 };
-pub(crate) use self::table_type::TableType;
+pub(crate) use self::table_type::{IdGeneration, TableType};
 pub(crate) use self::view::View;
 pub(crate) use self::with::With;

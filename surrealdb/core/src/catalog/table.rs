@@ -74,6 +74,9 @@ pub struct TableDefinition {
 	pub(crate) changefeed: Option<ChangeFeed>,
 	pub(crate) comment: Option<String>,
 	pub(crate) table_type: TableType,
+	/// How auto-generated record ids are minted on this table (Dorsid fork).
+	#[revision(start = 3)]
+	pub(crate) id_generation: IdGeneration,
 
 	/// The last time that a DEFINE FIELD was added to this table
 	pub(crate) cache_fields_ts: Uuid,
@@ -128,6 +131,7 @@ impl TableDefinition {
 			changefeed: None,
 			comment: None,
 			table_type: TableType::default(),
+			id_generation: IdGeneration::default(),
 			cache_fields_ts: now,
 			cache_events_ts: now,
 			cache_tables_ts: now,
@@ -162,6 +166,7 @@ impl TableDefinition {
 				.map(|v| sql::Expr::Literal(sql::Literal::String(v.into())))
 				.unwrap_or(sql::Expr::Literal(sql::Literal::None)),
 			table_type: self.table_type.clone().into(),
+			id_generation: self.id_generation.into(),
 			graphql_alias: self.graphql_alias.clone(),
 			graphql_deprecated: self.graphql_deprecated.clone(),
 			..Default::default()
@@ -182,6 +187,7 @@ impl InfoStructure for TableDefinition {
 			"drop" => self.drop.into(),
 			"schemafull" => self.schemafull.into(),
 			"kind" => self.table_type.structure(),
+			"id_generation" => self.id_generation.structure(),
 			"view", if let Some(v) = self.view => v.structure(),
 			"changefeed", if let Some(v) = self.changefeed => v.structure(),
 			"permissions" => self.permissions.structure(),
@@ -190,6 +196,31 @@ impl InfoStructure for TableDefinition {
 			"graphql_deprecated", if let Some(v) = self.graphql_deprecated => v.into(),
 			"id" => self.table_id.0.into(),
 		})
+	}
+}
+
+/// How a table's auto-generated record ids are minted when a row is created
+/// without an explicit `id` field.
+///
+/// - `Default`: existing random string ids, preserving upstream behavior.
+/// - `Sid`: Dorsid `Sid`, a monotonic i64 with per-table warm-up from stored keys.
+/// - `Rid`: Dorsid `Rid`, a stateless persistent i64 from CSPRNG entropy.
+#[revisioned(revision = 1)]
+#[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
+pub enum IdGeneration {
+	#[default]
+	Default,
+	Sid,
+	Rid,
+}
+
+impl InfoStructure for IdGeneration {
+	fn structure(self) -> Value {
+		match self {
+			IdGeneration::Default => "DEFAULT".into(),
+			IdGeneration::Sid => "SID".into(),
+			IdGeneration::Rid => "RID".into(),
+		}
 	}
 }
 

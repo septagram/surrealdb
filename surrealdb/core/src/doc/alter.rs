@@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
 use reblessive::tree::Stk;
 use surrealdb_types::ToSql;
 
-use crate::catalog::{DefineDefault, LATEST_EDGE_VARIANT, RecordType};
+use crate::catalog::{DefineDefault, IdGeneration, LATEST_EDGE_VARIANT, RecordType};
 use crate::ctx::{Context, FrozenContext};
 use crate::dbs::{Options, Statement};
 use crate::doc::{CursorDoc, Document, Extras};
@@ -96,8 +96,10 @@ impl Document {
 				let value = stk.run(|stk| expr.compute(stk, ctx, opt, doc)).await.catch_return()?;
 				value.generate(tb, false)?
 			} else {
-				// No id and no `DEFAULT`: synthesise one for the declared kind.
-				Self::generate_typed_id(&tb, id_kind)?
+				// No id and no `DEFAULT`: mint one via the table's `IdGeneration`
+				// policy. `Default` tables fall through to upstream's kind-aware
+				// synthesis; `sid` / `rid` tables mint a Dorsid key.
+				self.generate_default_id(ctx, tb, id_kind).await?
 			};
 			// The id field can not be a record range
 			ensure!(
@@ -181,6 +183,42 @@ impl Document {
 				error: Box::new(error),
 			}
 			.into()),
+		}
+	}
+
+	/// Mint a default record id for the given table based on its
+	/// [`IdGeneration`] policy. This is the fork-specific dispatch point for
+	/// Dorsid `Sid` and `Rid` IDs.
+	///
+	/// The `Default` arm delegates to [`Self::generate_typed_id`] so upstream's
+	/// kind-aware synthesis (uuid, singleton literals, random string) is
+	/// preserved verbatim for tables that don't opt into Sid/Rid. Sid/Rid keys
+	/// are `RecordIdKey::Number(i64)`; when the `id` field also declares a kind,
+	/// the caller's `coerce_id_key` validates them against it as usual.
+	async fn generate_default_id(
+		&self,
+		ctx: &FrozenContext,
+		tb: TableName,
+		id_kind: Option<&Kind>,
+	) -> Result<RecordId> {
+		let tb_def = Arc::clone(self.doc_ctx.tb()?);
+		match tb_def.id_generation {
+			IdGeneration::Default => Self::generate_typed_id(&tb, id_kind),
+			IdGeneration::Rid => {
+				let rid = dorsid::rid::next_persistent(None)
+					.map_err(|e| anyhow::anyhow!("dorsid Rid generation failed: {e}"))?;
+				Ok(RecordId::new(tb, rid.to_bits()))
+			}
+			IdGeneration::Sid => {
+				let registry = ctx.get_sid_registry().ok_or_else(|| {
+					anyhow::anyhow!(
+						"Sid generation requires a SidRegistry on the context; this is a bug"
+					)
+				})?;
+				let txn = ctx.tx();
+				let sid = registry.next_sid_warmed(&txn, &tb_def).await?;
+				Ok(RecordId::new(tb, sid.to_bits()))
+			}
 		}
 	}
 

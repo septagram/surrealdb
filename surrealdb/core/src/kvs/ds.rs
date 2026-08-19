@@ -81,6 +81,7 @@ use crate::kvs::LockType::*;
 use crate::kvs::TransactionType::*;
 use crate::kvs::cache::ds::DatastoreCache;
 use crate::kvs::clock::SystemClock;
+use crate::kvs::dorsid::SidRegistry;
 use crate::kvs::ds::requirements::{
 	TransactionBuilderFactoryRequirements, TransactionBuilderRequirements,
 };
@@ -288,6 +289,8 @@ pub struct Datastore {
 	buckets: BucketsManager,
 	// The sequences
 	sequences: Sequences,
+	// The Dorsid Sid generator registry
+	sid_registry: Arc<SidRegistry>,
 	// The surrealism cache
 	#[cfg(feature = "surrealism")]
 	surrealism_cache: Arc<SurrealismCache>,
@@ -1029,6 +1032,7 @@ impl Datastore {
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets: self.buckets,
 			sequences: Sequences::new(self.transaction_factory.clone(), self.id),
+			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
 			transaction_factory: self.transaction_factory,
 			async_event_trigger: self.async_event_trigger,
 			#[cfg(feature = "surrealism")]
@@ -1079,6 +1083,7 @@ impl Datastore {
 			function_registry: Arc::new(FunctionRegistry::with_builtins()),
 			buckets: self.buckets.clone(),
 			sequences: Sequences::new(transaction_factory.clone(), id),
+			sid_registry: Arc::new(SidRegistry::new(SidRegistry::realm_from_env())),
 			transaction_factory,
 			async_event_trigger: Arc::clone(&self.async_event_trigger),
 			#[cfg(feature = "surrealism")]
@@ -4595,6 +4600,7 @@ impl Datastore {
 			self.index_stores.clone(),
 			self.index_builder.clone(),
 			self.sequences.clone(),
+			Arc::clone(&self.sid_registry),
 			Arc::clone(&self.cache),
 			Arc::clone(&self.function_registry),
 			#[cfg(feature = "http")]

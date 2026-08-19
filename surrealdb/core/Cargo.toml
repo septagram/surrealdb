@@ -79,6 +79,7 @@ surrealml-core = { workspace = true, optional = true }
 affinitypool = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 dmp.workspace = true
+dorsid.workspace = true
 indxdb = { workspace = true, optional = true }
 js = { workspace = true, features = [
     "array-buffer",

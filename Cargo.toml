@@ -70,6 +70,12 @@ surrealism-runtime = { version = "0.5", path = "surrealism/runtime" }
 surrealism-types = { version = "0.5", path = "surrealism/types", default-features = false }
 # External surreal crates
 affinitypool = "0.7.0"
+dorsid = { path = "../diceware-ordinal/dorsid", default-features = false, features = [
+    "time",
+    "sid", "sid-persistent",
+    "rid", "rid-persistent",
+    "csprng-getrandom",
+] }
 dmp = "0.2.3"
 indxdb = "0.12.0"
 lexicmp = "0.2.0"
