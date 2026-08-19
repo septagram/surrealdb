@@ -32,6 +32,7 @@ use rust_decimal::prelude::FromPrimitive;
 use serde_json::Number;
 use surrealdb_types::ToSql;
 
+#[cfg(feature = "auth")]
 use super::auth::add_auth_mutations;
 use super::error::{GraphqlError, resolver_error};
 #[cfg(debug_assertions)]
@@ -193,6 +194,7 @@ pub async fn generate_schema(
 	}
 
 	// Generate auth mutations (signIn/signUp) from access definitions
+	#[cfg(feature = "auth")]
 	{
 		let accesses = tx.all_db_accesses(db_def.namespace_id, db_def.database_id, None).await?;
 		if !accesses.is_empty() {

@@ -102,7 +102,6 @@ use reqwest::RequestBuilder;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use surrealdb_core::dbs::{QueryResult, QueryResultBuilder};
-use surrealdb_core::iam::Token as CoreToken;
 use surrealdb_core::rpc::{self, DbResponse, DbResult};
 use surrealdb_types::{AuthError, NotAllowedError};
 #[cfg(not(target_family = "wasm"))]
@@ -645,7 +644,7 @@ async fn send_request(
 }
 
 async fn refresh_token(
-	token: CoreToken,
+	token: Token,
 	base_url: &Url,
 	client: &reqwest::Client,
 	headers: &HeaderMap,
@@ -856,10 +855,7 @@ async fn router(
 						// If authentication fails with "token has expired" and we have a refresh
 						// token, automatically attempt to refresh the authentication and
 						// update the stored auth.
-						if let CoreToken::WithRefresh {
-							..
-						} = &token
-						{
+						if token.refresh.is_some() {
 							// If the error is due to token expiration, attempt automatic refresh
 							if error.not_allowed_details().is_some_and(|a| {
 								matches!(a, NotAllowedError::Auth(AuthError::TokenExpired))

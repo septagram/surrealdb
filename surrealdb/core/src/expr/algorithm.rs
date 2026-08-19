@@ -28,6 +28,7 @@ impl Algorithm {
 	}
 }
 
+#[cfg(feature = "auth")]
 impl From<Algorithm> for jsonwebtoken::Algorithm {
 	fn from(val: Algorithm) -> Self {
 		match val {

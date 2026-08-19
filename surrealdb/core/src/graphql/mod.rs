@@ -37,6 +37,7 @@
 //! because `async_graphql` and the HTTP serving stack are not compatible with WASM.
 #![cfg(not(target_family = "wasm"))]
 
+#[cfg(feature = "auth")]
 mod auth;
 pub mod cache;
 pub mod error;

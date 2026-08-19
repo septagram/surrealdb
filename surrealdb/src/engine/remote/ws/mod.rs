@@ -17,7 +17,6 @@ use std::time::Duration;
 use async_channel::Sender;
 use futures::{Sink, SinkExt};
 use surrealdb_core::dbs::{QueryResult, QueryResultBuilder};
-use surrealdb_core::iam::token::Token;
 use surrealdb_core::rpc::{DbResponse, DbResult};
 use surrealdb_types::{
 	AuthError, ConnectionError, Error as TypesError, NotAllowedError, SerializationError,
@@ -435,11 +434,10 @@ where
 				token,
 				..
 			}) = pending.command
-				&& let Token::WithRefresh {
-					..
-				} = &token && error
-				.not_allowed_details()
-				.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
+				&& token.refresh.is_some()
+				&& error
+					.not_allowed_details()
+					.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
 			{
 				// Attempt automatic refresh
 				let refresh_request = RouterRequest {
