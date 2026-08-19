@@ -1,0 +1,735 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8ad4a5c8c..5682cb22c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -266,8 +266,14 @@ default = [
+     "graphql",
+     "mcp",
+     "cli",
++    "server",
+ ]
+ 
++# Pulls the surrealdb-server `server` umbrella so the hosted-server build
++# of the binary stays complete after customware/002 moved embedded-first
++# defaults further down the stack.
++server = ["surrealdb-server/server"]
++auth = ["surrealdb-server/auth"]
+ allocator = ["surrealdb-server/allocator"]
+ allocation-tracking = ["surrealdb-server/allocation-tracking"]
+ http = ["surrealdb-server/http"]
+diff --git a/surrealdb/Cargo.toml b/surrealdb/Cargo.toml
+index 9d7190eab..03479d048 100644
+--- a/surrealdb/Cargo.toml
++++ b/surrealdb/Cargo.toml
+@@ -14,8 +14,20 @@ categories.workspace = true
+ license-file.workspace = true
+ 
+ [features]
+-# Public features
+-default = ["protocol-ws", "rustls"]
++# Public features.
++#
++# customware/002 flips defaults to embedded-first: vanilla `cargo add surrealdb`
++# in this fork gets only `kv-mem` (no WebSocket client, no TLS, no graphql,
++# no auth). Anyone running this fork as a hosted server enables `server`
++# (and probably `protocol-ws,rustls` for client transports too).
++default = ["kv-mem"]
++# Pass-through for the surrealdb-core server umbrella — pulls auth, http,
++# jwks, graphql.
++server = ["surrealdb-core/server"]
++# Pass-through for the surrealdb-core auth feature — pulls jsonwebtoken
++# and the IAM credential pipeline. Embedded users who want DEFINE USER /
++# DEFINE ACCESS without the rest of `server` enable this directly.
++auth = ["surrealdb-core/auth"]
+ allocator = ["surrealdb-core/allocator"]
+ protocol-http = ["dep:reqwest", "surrealdb-types/reqwest"]
+ protocol-ws = ["dep:tokio-tungstenite", "tokio/time"]
+@@ -26,6 +38,8 @@ kv-tikv = ["surrealdb-core/kv-tikv", "tokio/time"]
+ kv-surrealkv = ["surrealdb-core/kv-surrealkv", "tokio/time"]
+ scripting = ["surrealdb-core/scripting"]
+ http = ["surrealdb-core/http"]
++graphql = ["surrealdb-core/graphql"]
++surrealism = ["surrealdb-core/surrealism"]
+ native-tls = [
+     "dep:native-tls",
+     "reqwest?/native-tls",
+@@ -122,7 +136,6 @@ env_logger.workspace = true
+ flate2.workspace = true
+ parking_lot.workspace = true
+ web-time.workspace = true
+-pprof = { workspace = true, features = ["flamegraph", "criterion"] }
+ radix_trie.workspace = true
+ rand.workspace = true
+ rayon.workspace = true
+@@ -137,6 +150,11 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ ulid = { workspace = true, features = ["serde"] }
+ wiremock.workspace = true
+ 
++# pprof's profiler relies on Unix-only libc types and does not compile on
++# Windows. Mirror of the same gate in `surrealdb/core/Cargo.toml`.
++[target.'cfg(unix)'.dev-dependencies]
++pprof = { workspace = true, features = ["flamegraph", "criterion"] }
++
+ [package.metadata.cargo-machete]
+ # Unused in our source; only needed so the derive is built with sdk-path
+ # for macro output (::surrealdb::types). Not exposed on surrealdb-types.
+diff --git a/surrealdb/core/Cargo.toml b/surrealdb/core/Cargo.toml
+index 2b130ecc4..c8a8d563c 100644
+--- a/surrealdb/core/Cargo.toml
++++ b/surrealdb/core/Cargo.toml
+@@ -14,8 +14,18 @@ categories.workspace = true
+ license-file.workspace = true
+ 
+ [features]
+-# Public features
+-default = ["kv-mem", "graphql"]
++# Public features.
++#
++# `default` is intentionally lean (embedded-first per customware/002, D6).
++# Server / hosted SurrealDB builds enable `server` explicitly via the
++# `surrealdb-server` crate. Embedded library users get just `kv-mem` and
++# can layer on what they need with `--features ...`.
++default = ["kv-mem"]
++# Umbrella feature for hosted-server functionality. Pulls every subsystem
++# an HTTP/RPC SurrealDB server needs but an embedded library typically does
++# not. `surrealism` (WASM plugin runtime) is intentionally NOT included —
++# it's orthogonal and stays opt-in for both embedded and hosted users.
++server = ["http", "jwks", "auth", "graphql"]
+ kv-mem = [
+     "dep:surrealmx",
+     "tokio/time",
+@@ -42,7 +52,11 @@ kv-surrealkv = [
+ scripting = ["dep:js"]
+ http = ["dep:reqwest"]
+ ml = ["dep:surrealml-core"]
+-jwks = ["dep:reqwest"]
++# Gates the IAM credential pipeline (signin/signup/verify/issue/token/jwks)
++# and pulls jsonwebtoken. Without it, only Session::owner() works; DEFINE
++# USER / DEFINE ACCESS execute with an "unsupported" error.
++auth = ["dep:jsonwebtoken"]
++jwks = ["auth", "dep:reqwest"]
+ surrealism = ["dep:surrealism-runtime", "dep:async-trait"]
+ allocator = ["dep:jemallocator", "dep:mimalloc"]
+ arbitrary = [
+@@ -185,7 +199,7 @@ mime = "0.3.17"
+ # WASM DEPENDENCY CONFIGURATION
+ [target.'cfg(target_family = "wasm")'.dependencies]
+ getrandom = { workspace = true, features = ["wasm_js"] }
+-jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
++jsonwebtoken = { workspace = true, features = ["rust_crypto"], optional = true }
+ ring = { workspace = true, features = ["wasm32_unknown_unknown_js"] }
+ surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers"] }
+ tokio = { workspace = true, default-features = false, features = [
+@@ -212,7 +226,7 @@ diskann-vector.workspace = true
+ # Note: surrealism-runtime is only available on non-WASM targets
+ # The surrealism feature will be enabled by default for non-WASM in the parent workspace
+ [target.'cfg(not(target_family = "wasm"))'.dependencies]
+-jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
++jsonwebtoken = { workspace = true, features = ["aws_lc_rs"], optional = true }
+ surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers", "rpc"] }
+ tokio = { workspace = true, default-features = false, features = [
+     "macros",
+diff --git a/surrealdb/core/src/err/mod.rs b/surrealdb/core/src/err/mod.rs
+index daed4d3f4..324fadd47 100644
+--- a/surrealdb/core/src/err/mod.rs
++++ b/surrealdb/core/src/err/mod.rs
+@@ -8,6 +8,7 @@ use base64::DecodeError as Base64Error;
+ use ext_sort::SortError;
+ use fst::Error as FstError;
+ use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
++#[cfg(feature = "auth")]
+ use jsonwebtoken::errors::Error as JWTError;
+ use object_store::Error as ObjectStoreError;
+ use revision::Error as RevisionError;
+@@ -1312,6 +1313,7 @@ impl From<Base64Error> for Error {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<JWTError> for Error {
+ 	fn from(_: JWTError) -> Error {
+ 		Error::InvalidAuth
+diff --git a/surrealdb/core/src/expr/algorithm.rs b/surrealdb/core/src/expr/algorithm.rs
+index 40415640c..522a73ab9 100644
+--- a/surrealdb/core/src/expr/algorithm.rs
++++ b/surrealdb/core/src/expr/algorithm.rs
+@@ -28,6 +28,7 @@ impl Algorithm {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<Algorithm> for jsonwebtoken::Algorithm {
+ 	fn from(val: Algorithm) -> Self {
+ 		match val {
+diff --git a/surrealdb/core/src/gql/mod.rs b/surrealdb/core/src/gql/mod.rs
+index 7b2bd405d..a893bd53a 100644
+--- a/surrealdb/core/src/gql/mod.rs
++++ b/surrealdb/core/src/gql/mod.rs
+@@ -36,6 +36,7 @@
+ //! because `async_graphql` and the HTTP serving stack are not compatible with WASM.
+ #![cfg(not(target_family = "wasm"))]
+ 
++#[cfg(feature = "auth")]
+ mod auth;
+ pub mod cache;
+ pub mod error;
+diff --git a/surrealdb/core/src/gql/schema.rs b/surrealdb/core/src/gql/schema.rs
+index 35635d27a..a0cad1f9c 100644
+--- a/surrealdb/core/src/gql/schema.rs
++++ b/surrealdb/core/src/gql/schema.rs
+@@ -32,6 +32,7 @@ use rust_decimal::prelude::FromPrimitive;
+ use serde_json::Number;
+ use surrealdb_types::ToSql;
+ 
++#[cfg(feature = "auth")]
+ use super::auth::add_auth_mutations;
+ use super::error::{GqlError, resolver_error};
+ #[cfg(debug_assertions)]
+@@ -193,6 +194,7 @@ pub async fn generate_schema(
+ 	}
+ 
+ 	// Generate auth mutations (signIn/signUp) from access definitions
++	#[cfg(feature = "auth")]
+ 	{
+ 		let accesses = tx.all_db_accesses(db_def.namespace_id, db_def.database_id, None).await?;
+ 		if !accesses.is_empty() {
+diff --git a/surrealdb/core/src/iam/mod.rs b/surrealdb/core/src/iam/mod.rs
+index 14ae2a85e..3214570f6 100644
+--- a/surrealdb/core/src/iam/mod.rs
++++ b/surrealdb/core/src/iam/mod.rs
+@@ -1,7 +1,9 @@
++#[cfg(feature = "auth")]
+ use std::sync::Once;
+ 
+ pub use entities::Level;
+ use thiserror::Error;
++#[cfg(feature = "auth")]
+ pub use token::Token;
+ 
+ pub mod access;
+@@ -11,17 +13,23 @@ pub mod check;
+ pub mod clear;
+ pub mod entities;
+ pub(crate) mod file;
++#[cfg(feature = "auth")]
+ pub mod issue;
+ #[cfg(feature = "jwks")]
+ pub mod jwks;
+ pub mod reset;
++#[cfg(feature = "auth")]
+ pub mod signin;
++#[cfg(feature = "auth")]
+ pub mod signup;
++#[cfg(feature = "auth")]
+ pub mod token;
++#[cfg(feature = "auth")]
+ pub mod verify;
+ 
+ pub use self::auth::*;
+ pub use self::entities::*;
++#[cfg(feature = "auth")]
+ use crate::catalog;
+ 
+ #[derive(Error, Debug)]
+@@ -38,6 +46,7 @@ pub enum Error {
+ 	},
+ }
+ 
++#[cfg(feature = "auth")]
+ fn algorithm_to_jwt_algorithm(alg: catalog::Algorithm) -> jsonwebtoken::Algorithm {
+ 	match alg {
+ 		catalog::Algorithm::Hs256 => jsonwebtoken::Algorithm::HS256,
+diff --git a/surrealdb/core/src/kvs/ds.rs b/surrealdb/core/src/kvs/ds.rs
+index 761a78972..765fd599a 100644
+--- a/surrealdb/core/src/kvs/ds.rs
++++ b/surrealdb/core/src/kvs/ds.rs
+@@ -3920,7 +3920,7 @@ impl crate::dbs::NodeEndpointResolver for CatalogNodeEndpointResolver {
+ 	}
+ }
+ 
+-#[cfg(test)]
++#[cfg(all(test, feature = "auth"))]
+ mod test {
+ 	use std::collections::BTreeMap;
+ 	use std::future::pending;
+diff --git a/surrealdb/core/src/rpc/mod.rs b/surrealdb/core/src/rpc/mod.rs
+index 03126c842..545671407 100644
+--- a/surrealdb/core/src/rpc/mod.rs
++++ b/surrealdb/core/src/rpc/mod.rs
+@@ -1,6 +1,7 @@
+ mod args;
+ mod error;
+ mod method;
++#[cfg(feature = "auth")]
+ mod protocol;
+ mod response;
+ 
+@@ -14,6 +15,7 @@ pub use error::{
+ };
+ pub use format::Format;
+ pub use method::Method;
++#[cfg(feature = "auth")]
+ pub use protocol::RpcProtocol;
+ pub use request::Request;
+ pub use response::{DbResponse, DbResult, DbResultStats};
+diff --git a/surrealdb/core/src/sql/algorithm.rs b/surrealdb/core/src/sql/algorithm.rs
+index 56afef75e..f0384d74b 100644
+--- a/surrealdb/core/src/sql/algorithm.rs
++++ b/surrealdb/core/src/sql/algorithm.rs
+@@ -28,6 +28,7 @@ impl Algorithm {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<Algorithm> for jsonwebtoken::Algorithm {
+ 	fn from(val: Algorithm) -> Self {
+ 		match val {
+diff --git a/surrealdb/server/Cargo.toml b/surrealdb/server/Cargo.toml
+index 1f2af648a..5e2b4077d 100644
+--- a/surrealdb/server/Cargo.toml
++++ b/surrealdb/server/Cargo.toml
+@@ -27,8 +27,14 @@ default = [
+     "surrealism",
+     "graphql",
+     "cli",
++    "server",
+ ]
+-http = ["surrealdb-core/http"]
++# Pulls the surrealdb-core `server` umbrella — auth + http + jwks + graphql.
++# This is what makes the hosted-server build complete after customware/002
++# moved embedded-first defaults.
++server = ["surrealdb-core/server", "surrealdb/server"]
++auth = ["surrealdb-core/auth", "surrealdb/auth"]
++http = ["server"]
+ jwks = ["surrealdb-core/jwks"]
+ # Build against AWS-LC FIPS 3.0.x (NIST CMVP cert #4816).
+ # Restricts TLS to FIPS-approved cipher suites at runtime.
+diff --git a/surrealdb/src/conn/cmd.rs b/surrealdb/src/conn/cmd.rs
+index fe2264d1d..dd3a9e02b 100644
+--- a/surrealdb/src/conn/cmd.rs
++++ b/surrealdb/src/conn/cmd.rs
+@@ -2,11 +2,11 @@ use std::borrow::Cow;
+ use std::path::PathBuf;
+ 
+ use async_channel::Sender;
+-use surrealdb_core::iam::token::Token;
+ use surrealdb_core::kvs::export::Config as DbExportConfig;
+ use uuid::Uuid;
+ 
+ use super::MlExportConfig;
++use crate::opt::auth::Token;
+ use crate::types::{Array, Notification, Object, Value, Variables};
+ 
+ #[derive(Debug, Clone)]
+diff --git a/surrealdb/src/engine/local/mod.rs b/surrealdb/src/engine/local/mod.rs
+index a083ae456..69e2a2093 100644
+--- a/surrealdb/src/engine/local/mod.rs
++++ b/surrealdb/src/engine/local/mod.rs
+@@ -193,8 +193,11 @@ use crate::conn::Command;
+ use crate::conn::MlExportConfig;
+ use crate::engine::SessionError;
+ use crate::opt::IntoEndpoint;
++#[cfg(feature = "auth")]
+ use crate::opt::auth::{AccessToken, RefreshToken, SecureToken, Token};
+-use crate::types::{HashMap, Notification, SurrealValue, ToSql, Value, Variables};
++#[cfg(feature = "auth")]
++use crate::types::SurrealValue;
++use crate::types::{HashMap, Notification, ToSql, Value, Variables};
+ use crate::{Connect, Surreal};
+ 
+ /// In-memory database
+@@ -602,6 +605,55 @@ async fn kill_live_query(
+ 	Ok(results)
+ }
+ 
++#[cfg(feature = "auth")]
++fn sdk_token_from_core(token: iam::Token) -> Token {
++	match token {
++		iam::Token::Access(token) => Token {
++			access: AccessToken(SecureToken(token)),
++			refresh: None,
++		},
++		iam::Token::WithRefresh {
++			access,
++			refresh,
++		} => Token {
++			access: AccessToken(SecureToken(access)),
++			refresh: Some(RefreshToken(SecureToken(refresh))),
++		},
++	}
++}
++
++#[cfg(feature = "auth")]
++fn core_token_from_sdk(token: Token) -> iam::Token {
++	match token.refresh {
++		Some(refresh) => iam::Token::WithRefresh {
++			access: token.access.into_insecure_token(),
++			refresh: refresh.into_insecure_token(),
++		},
++		None => iam::Token::Access(token.access.into_insecure_token()),
++	}
++}
++
++#[cfg(feature = "auth")]
++async fn refresh_auth_token(
++	token: Token,
++	kvs: &Datastore,
++	session: &mut Session,
++) -> anyhow::Result<Token> {
++	core_token_from_sdk(token).refresh(kvs, session).await.map(sdk_token_from_core)
++}
++
++#[cfg(feature = "auth")]
++async fn revoke_refresh_token(token: Token, kvs: &Datastore) -> anyhow::Result<()> {
++	core_token_from_sdk(token).revoke_refresh_token(kvs).await
++}
++
++#[cfg(not(feature = "auth"))]
++fn auth_feature_disabled() -> Vec<QueryResult> {
++	vec![QueryResultBuilder::started_now().finish_with_result(Err(TypesError::internal(
++		"Authentication support is not enabled in this build".to_string(),
++	)))]
++}
++
+ async fn router(
+ 	kvs: &Arc<Datastore>,
+ 	state: &SessionState,
+@@ -621,77 +673,70 @@ async fn router(
+ 		Command::Signup {
+ 			credentials,
+ 		} => {
+-			let query_result = QueryResultBuilder::started_now();
+-			let signup_data = {
+-				iam::signup::signup(kvs, &mut *state.session.write().await, credentials.into())
+-					.await
+-					.map_err(surrealdb_core::err::anyhow_to_types_error)?
+-			};
+-			let token = match signup_data {
+-				iam::Token::Access(token) => Token {
+-					access: AccessToken(SecureToken(token)),
+-					refresh: None,
+-				},
+-				iam::Token::WithRefresh {
+-					access: token,
+-					refresh,
+-				} => Token {
+-					access: AccessToken(SecureToken(token)),
+-					refresh: Some(RefreshToken(SecureToken(refresh))),
+-				},
+-			};
+-			let result = query_result.finish_with_result(Ok(token.into_value()));
+-			Ok(vec![result])
++			#[cfg(feature = "auth")]
++			{
++				let query_result = QueryResultBuilder::started_now();
++				let token = {
++					iam::signup::signup(kvs, &mut *state.session.write().await, credentials.into())
++						.await
++						.map(sdk_token_from_core)
++						.map_err(surrealdb_core::err::anyhow_to_types_error)?
++				};
++				let result = query_result.finish_with_result(Ok(token.into_value()));
++				Ok(vec![result])
++			}
++			#[cfg(not(feature = "auth"))]
++			{
++				let _ = credentials;
++				Ok(auth_feature_disabled())
++			}
+ 		}
+ 		Command::Signin {
+ 			credentials,
+ 		} => {
+-			let query_result = QueryResultBuilder::started_now();
+-			let signin_data = {
+-				iam::signin::signin(kvs, &mut *state.session.write().await, credentials.into())
+-					.await
+-					.map_err(surrealdb_core::err::anyhow_to_types_error)?
+-			};
+-			let token = match signin_data {
+-				iam::Token::Access(token) => Token {
+-					access: AccessToken(SecureToken(token)),
+-					refresh: None,
+-				},
+-				iam::Token::WithRefresh {
+-					access,
+-					refresh,
+-				} => Token {
+-					access: AccessToken(SecureToken(access)),
+-					refresh: Some(RefreshToken(SecureToken(refresh))),
+-				},
+-			};
+-			let result = query_result.finish_with_result(Ok(token.into_value()));
+-			Ok(vec![result])
++			#[cfg(feature = "auth")]
++			{
++				let query_result = QueryResultBuilder::started_now();
++				let token = {
++					iam::signin::signin(kvs, &mut *state.session.write().await, credentials.into())
++						.await
++						.map(sdk_token_from_core)
++						.map_err(surrealdb_core::err::anyhow_to_types_error)?
++				};
++				let result = query_result.finish_with_result(Ok(token.into_value()));
++				Ok(vec![result])
++			}
++			#[cfg(not(feature = "auth"))]
++			{
++				let _ = credentials;
++				Ok(auth_feature_disabled())
++			}
+ 		}
+ 		Command::Authenticate {
+ 			token,
+ 		} => {
+-			let query_result = QueryResultBuilder::started_now();
+-			// Extract the access token and check if this token supports refresh
+-			let (access, with_refresh) = match &token {
+-				iam::Token::Access(access) => (access, false),
+-				iam::Token::WithRefresh {
+-					access,
+-					..
+-				} => (access, true),
+-			};
+-			// Attempt to authenticate with the access token
+-			let result = {
+-				match iam::verify::token(kvs, &mut *state.session.write().await, access).await {
+-					// Authentication successful - return the original token
+-					Ok(_) => query_result.finish_with_result(Ok(token.into_value())),
+-					Err(error) => {
+-						// Automatic refresh token handling:
+-						// If the access token is expired and we have a refresh token,
+-						// automatically attempt to refresh and return new tokens.
+-						if with_refresh && surrealdb_core::iam::is_expired_token_error(&error) {
+-							let result =
+-								match token.refresh(kvs, &mut *state.session.write().await).await {
++			#[cfg(feature = "auth")]
++			{
++				let query_result = QueryResultBuilder::started_now();
++				let with_refresh = token.refresh.is_some();
++				let access = token.access.as_insecure_token();
++				// Attempt to authenticate with the access token
++				let result = {
++					match iam::verify::token(kvs, &mut *state.session.write().await, access).await {
++						// Authentication successful - return the original token
++						Ok(_) => query_result.finish_with_result(Ok(token.into_value())),
++						Err(error) => {
++							// Automatic refresh token handling:
++							// If the access token is expired and we have a refresh token,
++							// automatically attempt to refresh and return new tokens.
++							if with_refresh && surrealdb_core::iam::is_expired_token_error(&error) {
++								let result = match refresh_auth_token(
++									token,
++									kvs,
++									&mut *state.session.write().await,
++								)
++								.await
++								{
+ 									Ok(token) => {
+ 										query_result.finish_with_result(Ok(token.into_value()))
+ 									}
+@@ -699,30 +744,44 @@ async fn router(
+ 										TypesError::internal(error.to_string()),
+ 									)),
+ 								};
+-							return Ok(vec![result]);
++								return Ok(vec![result]);
++							}
++							// If authentication failed and automatic refresh isn't applicable,
++							// return the authentication error
++							query_result
++								.finish_with_result(Err(TypesError::internal(error.to_string())))
+ 						}
+-						// If authentication failed and automatic refresh isn't applicable,
+-						// return the authentication error
+-						query_result
+-							.finish_with_result(Err(TypesError::internal(error.to_string())))
+ 					}
+-				}
+-			};
+-			Ok(vec![result])
++				};
++				Ok(vec![result])
++			}
++			#[cfg(not(feature = "auth"))]
++			{
++				let _ = token;
++				Ok(auth_feature_disabled())
++			}
+ 		}
+ 		Command::Refresh {
+ 			token,
+ 		} => {
+-			// Refresh command: Exchange a refresh token for new access and refresh tokens
+-			let query_result = QueryResultBuilder::started_now();
+-			let result = {
+-				match token.refresh(kvs, &mut *state.session.write().await).await {
+-					Ok(token) => query_result.finish_with_result(Ok(token.into_value())),
+-					Err(error) => query_result
+-						.finish_with_result(Err(TypesError::internal(error.to_string()))),
+-				}
+-			};
+-			Ok(vec![result])
++			#[cfg(feature = "auth")]
++			{
++				// Refresh command: Exchange a refresh token for new access and refresh tokens
++				let query_result = QueryResultBuilder::started_now();
++				let result = {
++					match refresh_auth_token(token, kvs, &mut *state.session.write().await).await {
++						Ok(token) => query_result.finish_with_result(Ok(token.into_value())),
++						Err(error) => query_result
++							.finish_with_result(Err(TypesError::internal(error.to_string()))),
++					}
++				};
++				Ok(vec![result])
++			}
++			#[cfg(not(feature = "auth"))]
++			{
++				let _ = token;
++				Ok(auth_feature_disabled())
++			}
+ 		}
+ 		Command::Invalidate => {
+ 			let query_result = QueryResultBuilder::started_now();
+@@ -752,15 +811,22 @@ async fn router(
+ 		Command::Revoke {
+ 			token,
+ 		} => {
+-			// Revoke command: Explicitly invalidate a refresh token to prevent future use
+-			let query_result = QueryResultBuilder::started_now();
+-			let result = match token.revoke_refresh_token(kvs).await {
+-				Ok(_) => query_result.finish_with_result(Ok(Value::None)),
+-				Err(error) => {
+-					query_result.finish_with_result(Err(TypesError::internal(error.to_string())))
+-				}
+-			};
+-			Ok(vec![result])
++			#[cfg(feature = "auth")]
++			{
++				// Revoke command: Explicitly invalidate a refresh token to prevent future use
++				let query_result = QueryResultBuilder::started_now();
++				let result = match revoke_refresh_token(token, kvs).await {
++					Ok(_) => query_result.finish_with_result(Ok(Value::None)),
++					Err(error) => query_result
++						.finish_with_result(Err(TypesError::internal(error.to_string()))),
++				};
++				Ok(vec![result])
++			}
++			#[cfg(not(feature = "auth"))]
++			{
++				let _ = token;
++				Ok(auth_feature_disabled())
++			}
+ 		}
+ 		Command::Rollback {
+ 			txn,
+diff --git a/surrealdb/src/engine/remote/http/mod.rs b/surrealdb/src/engine/remote/http/mod.rs
+index 21c7ed339..5d6791582 100644
+--- a/surrealdb/src/engine/remote/http/mod.rs
++++ b/surrealdb/src/engine/remote/http/mod.rs
+@@ -102,7 +102,6 @@ use reqwest::RequestBuilder;
+ use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
+ use serde::{Deserialize, Serialize};
+ use surrealdb_core::dbs::{QueryResult, QueryResultBuilder};
+-use surrealdb_core::iam::Token as CoreToken;
+ use surrealdb_core::rpc::{self, DbResponse, DbResult};
+ use surrealdb_types::{AuthError, NotAllowedError};
+ #[cfg(not(target_family = "wasm"))]
+@@ -645,7 +644,7 @@ async fn send_request(
+ }
+ 
+ async fn refresh_token(
+-	token: CoreToken,
++	token: Token,
+ 	base_url: &Url,
+ 	client: &reqwest::Client,
+ 	headers: &HeaderMap,
+@@ -856,10 +855,7 @@ async fn router(
+ 						// If authentication fails with "token has expired" and we have a refresh
+ 						// token, automatically attempt to refresh the authentication and
+ 						// update the stored auth.
+-						if let CoreToken::WithRefresh {
+-							..
+-						} = &token
+-						{
++						if token.refresh.is_some() {
+ 							// If the error is due to token expiration, attempt automatic refresh
+ 							if error.not_allowed_details().is_some_and(|a| {
+ 								matches!(a, NotAllowedError::Auth(AuthError::TokenExpired))
+diff --git a/surrealdb/src/engine/remote/mod.rs b/surrealdb/src/engine/remote/mod.rs
+index 269684227..947a22830 100644
+--- a/surrealdb/src/engine/remote/mod.rs
++++ b/surrealdb/src/engine/remote/mod.rs
+@@ -102,7 +102,6 @@ pub mod http;
+ #[cfg_attr(docsrs, doc(cfg(feature = "protocol-ws")))]
+ pub mod ws;
+ 
+-use surrealdb_core::iam::token::Token;
+ use uuid::Uuid;
+ 
+ use crate::conn::cmd::Command;
+@@ -172,13 +171,7 @@ impl Command {
+ 				// Extract only the access token for authentication.
+ 				// If the token has a refresh component, we ignore it here
+ 				// as authentication only needs the access token.
+-				params: Some(Value::Array(Array::from(vec![match token {
+-					Token::Access(access) => access.into_value(),
+-					Token::WithRefresh {
+-						access,
+-						..
+-					} => access.into_value(),
+-				}]))),
++				params: Some(Value::Array(Array::from(vec![token.access.into_value()]))),
+ 				txn: None,
+ 				session_id,
+ 			},
+diff --git a/surrealdb/src/engine/remote/ws/mod.rs b/surrealdb/src/engine/remote/ws/mod.rs
+index 6a4b0cf68..6d83c0bc5 100644
+--- a/surrealdb/src/engine/remote/ws/mod.rs
++++ b/surrealdb/src/engine/remote/ws/mod.rs
+@@ -17,7 +17,6 @@ use std::time::Duration;
+ use async_channel::Sender;
+ use futures::{Sink, SinkExt};
+ use surrealdb_core::dbs::{QueryResult, QueryResultBuilder};
+-use surrealdb_core::iam::token::Token;
+ use surrealdb_core::rpc::{DbResponse, DbResult};
+ use surrealdb_types::{
+ 	AuthError, ConnectionError, Error as TypesError, NotAllowedError, SerializationError,
+@@ -435,11 +434,10 @@ where
+ 				token,
+ 				..
+ 			}) = pending.command
+-				&& let Token::WithRefresh {
+-					..
+-				} = &token && error
+-				.not_allowed_details()
+-				.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
++				&& token.refresh.is_some()
++				&& error
++					.not_allowed_details()
++					.is_some_and(|a| matches!(a, NotAllowedError::Auth(AuthError::TokenExpired)))
+ 			{
+ 				// Attempt automatic refresh
+ 				let refresh_request = RouterRequest {
+diff --git a/surrealdb/src/opt/auth.rs b/surrealdb/src/opt/auth.rs
+index 36f080f8e..86210ec04 100644
+--- a/surrealdb/src/opt/auth.rs
++++ b/surrealdb/src/opt/auth.rs
+@@ -194,7 +194,7 @@ impl<T, P> Credentials<T> for Record<P> where P: SurrealValue {}
+ ///     // Use refresh token to get new access token
+ /// }
+ /// ```
+-#[derive(Debug, Serialize, Deserialize)]
++#[derive(Clone, Debug, Serialize, Deserialize)]
+ #[non_exhaustive]
+ pub struct Token {
+ 	/// The access token used for API authentication.
+@@ -310,7 +310,7 @@ impl AccessToken {
+ /// // Use the token string to request a new access token
+ /// // (implementation depends on your authentication flow)
+ /// ```
+-#[derive(Debug, Serialize, Deserialize, SurrealValue)]
++#[derive(Clone, Debug, Serialize, Deserialize, SurrealValue)]
+ #[surreal(crate = "crate::types")]
+ pub struct RefreshToken(pub(crate) SecureToken);
+ 
