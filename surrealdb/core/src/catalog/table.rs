@@ -60,7 +60,7 @@ impl revision::WalkRevisioned for TableId {
 	}
 }
 
-#[revisioned(revision = 3)]
+#[revisioned(revision = 4)]
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TableDefinition {
 	pub(crate) namespace_id: NamespaceId,
@@ -75,7 +75,14 @@ pub struct TableDefinition {
 	pub(crate) comment: Option<String>,
 	pub(crate) table_type: TableType,
 	/// How auto-generated record ids are minted on this table (Dorsid fork).
-	#[revision(start = 3)]
+	///
+	/// Fork-local field, so it must claim a revision upstream has not used.
+	/// Upstream took revision 3 for `cache_lives_ts` in the 3.2 line, so this
+	/// moved 3 -> 4 during that rebase; bytes written by upstream at revision 3
+	/// decode with `IdGeneration::default()`. Any future rebase must re-check
+	/// this against upstream's `revisioned(revision = N)` and bump again if
+	/// upstream has since consumed 4.
+	#[revision(start = 4)]
 	pub(crate) id_generation: IdGeneration,
 
 	/// The last time that a DEFINE FIELD was added to this table
