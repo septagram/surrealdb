@@ -403,7 +403,7 @@ mod mem {
 	use surrealdb::opt::capabilities::{Capabilities, ExperimentalFeature};
 	use surrealdb::opt::{Config, Resource};
 	use surrealdb::types::RecordIdKey;
-	use surrealdb_types::RecordId;
+	use surrealdb_types::{Bytes, RecordId};
 	use tokio::sync::{Semaphore, SemaphorePermit};
 
 	use super::{ROOT_PASS, ROOT_USER};
@@ -510,6 +510,76 @@ mod mem {
 		let config = Config::new().capabilities(capabilities);
 		let db = Surreal::new::<Mem>(config).await.unwrap();
 		db.query(surql).await.unwrap().check().unwrap();
+	}
+
+	#[test_log::test(tokio::test)]
+	async fn local_config_applies_file_bucket_allowlist() {
+		let temp = temp_dir::TempDir::new().unwrap();
+		let bucket_dir = temp.child("buckets");
+		std::fs::create_dir_all(&bucket_dir).unwrap();
+		let canonical_bucket_dir = std::fs::canonicalize(&bucket_dir).unwrap();
+		let capabilities =
+			Capabilities::new().with_experimental_feature_allowed(ExperimentalFeature::Files);
+		let config = Config::new()
+			.capabilities(capabilities)
+			.bucket_folder_allowlist([bucket_dir.as_path(), canonical_bucket_dir.as_path()]);
+		let db = Surreal::new::<Mem>(config).await.unwrap();
+		db.use_ns("namespace").use_db("database").await.unwrap();
+
+		let backend = format!("file://{}?lowercase_paths=false", bucket_dir.display());
+		db.query("DEFINE BUCKET test BACKEND $backend PERMISSIONS FULL;")
+			.bind(("backend", backend))
+			.await
+			.unwrap()
+			.check()
+			.unwrap();
+		db.query("RETURN type::file('test', 'hello.txt').put($bytes);")
+			.bind(("bytes", b"hello".to_vec()))
+			.await
+			.unwrap()
+			.check()
+			.unwrap();
+		let mut response = db.query("RETURN type::file('test', 'hello.txt').get();").await.unwrap();
+		let stored: Option<Bytes> = response.take(0).unwrap();
+		let stored = stored.map(|bytes| bytes.into_inner().to_vec());
+
+		assert_eq!(stored.as_deref(), Some(b"hello".as_slice()));
+	}
+
+	/// Fork-local companion to `local_config_applies_file_bucket_allowlist`
+	/// (customware/004). The upstream PR only proves the allowlist *grants*
+	/// access; this proves the default still *denies* it.
+	///
+	/// An empty allowlist must deny every path — `buc::store::file::is_path_allowed`
+	/// returns false on an empty slice by design. SECURITY_GUIDE.md section 12:
+	/// "Backend URLs in DEFINE BUCKET must be validated against an allowlist."
+	/// If this ever starts passing, the entry has loosened a default and must not
+	/// ship.
+	#[test_log::test(tokio::test)]
+	async fn local_config_without_allowlist_still_denies_file_buckets() {
+		let temp = temp_dir::TempDir::new().unwrap();
+		let bucket_dir = temp.child("buckets");
+		std::fs::create_dir_all(&bucket_dir).unwrap();
+		let capabilities =
+			Capabilities::new().with_experimental_feature_allowed(ExperimentalFeature::Files);
+		// Identical to the positive test, minus the `bucket_folder_allowlist` call.
+		let config = Config::new().capabilities(capabilities);
+		let db = Surreal::new::<Mem>(config).await.unwrap();
+		db.use_ns("namespace").use_db("database").await.unwrap();
+
+		let backend = format!("file://{}?lowercase_paths=false", bucket_dir.display());
+		let denied = db
+			.query("DEFINE BUCKET test BACKEND $backend PERMISSIONS FULL;")
+			.bind(("backend", backend))
+			.await
+			.unwrap()
+			.check();
+
+		let err = denied.expect_err("DEFINE BUCKET must be denied when no allowlist is configured");
+		assert!(
+			err.to_string().contains("File access denied"),
+			"expected a File access denied error, got: {err}"
+		);
 	}
 
 	include_tests!(new_db => basic, serialisation, live, backup, session_isolation, run);
