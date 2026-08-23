@@ -191,19 +191,29 @@ impl InfoStatement {
 				// Create the result set
 				let res = if *structured {
 					let object = map! {
-						"accesses" => process(&txn.all_db_accesses(ns, db, version).await?),
-						"apis" => process(&txn.all_db_apis(ns, db, version).await?),
-						"analyzers" => process(&txn.all_db_analyzers(ns, db, version).await?),
-						"buckets" => process(&txn.all_db_buckets(ns, db, version).await?),
-						"functions" => process(&txn.all_db_functions(ns, db, version).await?),
-						"modules" => process_modules(ctx, ns, db, txn.all_db_modules(ns, db, version).await?).await,
-						"models" => process(&txn.all_db_models(ns, db, version).await?),
-						"params" => process(&txn.all_db_params(ns, db, version).await?),
-						"tables" => process(&txn.all_tb(ns, db, version).await?),
-						"users" => process(&txn.all_db_users(ns, db, version).await?),
-						"configs" => process(&txn.all_db_configs(ns, db, version).await?),
-						"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
-					};
+								"accesses" => process(&txn.all_db_accesses(ns, db, version).await?),
+								"apis" => process(&txn.all_db_apis(ns, db, version).await?),
+								"analyzers" => process(&txn.all_db_analyzers(ns, db, version).await?),
+								"buckets" => process(&txn.all_db_buckets(ns, db, version).await?),
+								"functions" => process(&txn.all_db_functions(ns, db, version).await?),
+								"modules" => process_modules(ctx, ns, db, txn.all_db_modules(ns, db, version).await?).await,
+								"models" => process(&txn.all_db_models(ns, db, version).await?),
+								"params" => process(&txn.all_db_params(ns, db, version).await?),
+								"tables" => {
+								// Fork-local: join each table with its `!ig` sidecar policy so
+								// `INFO ... STRUCTURE` reports `id_generation` for Dorsid tables.
+								// Tables on the default policy render exactly as upstream does.
+								let mut values = Vec::new();
+								for v in txn.all_tb(ns, db, version).await?.iter() {
+									let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
+									values.push(v.clone().structure_with_id_generation(ig));
+								}
+								Value::Array(values.into())
+					},
+								"users" => process(&txn.all_db_users(ns, db, version).await?),
+								"configs" => process(&txn.all_db_configs(ns, db, version).await?),
+								"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
+							};
 					Value::Object(Object::from(object))
 				} else {
 					let object = map! {
@@ -264,11 +274,17 @@ impl InfoStatement {
 							out.into()
 						},
 						"tables" => {
-							let mut out = Object::default();
-							for v in txn.all_tb(ns, db, version).await?.iter() {
-								out.insert(v.name.clone(), v.to_sql().into());
-							}
-							out.into()
+						let mut out = Object::default();
+						for v in txn.all_tb(ns, db, version).await?.iter() {
+							// Fork-local: render the `ID SID` / `ID RID` clause from the
+							// sidecar policy. Default-policy tables render as upstream.
+							let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
+							out.insert(
+								v.name.clone(),
+								v.to_sql_definition_with_id_generation(ig).to_sql().into(),
+							);
+						}
+						out.into()
 						},
 						"users" => {
 							let mut out = Object::default();

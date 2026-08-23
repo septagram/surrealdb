@@ -51,8 +51,3 @@ mod v3_1_0;
 mod v3_1_1;
 #[rustfmt::skip]
 mod v3_2_2;
-/// Fork-local snapshot: customware/001 advanced `TableDefinition` past
-/// upstream's revision 3, so this fork writes a format no upstream release
-/// emits. See the module docs and `tests.rs::version_writes_current_format`.
-#[rustfmt::skip]
-mod v3_2_4_customware;

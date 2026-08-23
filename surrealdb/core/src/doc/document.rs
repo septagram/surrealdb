@@ -8,8 +8,8 @@ use tokio::sync::OnceCell;
 
 use crate::catalog::providers::TableProvider;
 use crate::catalog::{
-	DatabaseDefinition, EventDefinition, FieldDefinition, IndexDefinition, NamespaceDefinition,
-	Record, SubscriptionDefinition, TableDefinition,
+	DatabaseDefinition, EventDefinition, FieldDefinition, IdGeneration, IndexDefinition,
+	NamespaceDefinition, Record, SubscriptionDefinition, TableDefinition,
 };
 use crate::ctx::{Context, FrozenContext};
 use crate::dbs::{Operable, Processable};
@@ -122,6 +122,16 @@ pub(crate) struct NsDbTbCtx {
 	/// can run permission reduction, computed fields, and projection without
 	/// async catalog calls.
 	pub(crate) fields: Arc<[FieldDefinition]>,
+	/// The table's Dorsid id-generation policy, read from the fork-owned `!ig`
+	/// sidecar key (see [`crate::key::table::ig`]). Loaded once per statement
+	/// alongside the other per-table definitions rather than per record.
+	///
+	/// Deliberately *not* served from the datastore cache: that cache keys on
+	/// the `cache_*_ts` stamps carried by `TableDefinition`, and the policy has
+	/// no such stamp. The per-transaction read cache underneath `txn.get`
+	/// already collapses repeat reads, and going through the transaction keeps
+	/// the policy consistent with the rest of the statement's catalog view.
+	pub(crate) id_generation: IdGeneration,
 	/// Index into `fields` of the `id` field definition, if one is defined.
 	/// Precomputed once so the write path can read the id field's kind and
 	/// default in O(1) without rescanning the field list per record.
@@ -159,6 +169,10 @@ impl NsDbTbCtx {
 			None => ctx.get_cache(),
 			Some(_) => None,
 		};
+		// Fetch the fork's per-table id-generation policy. An absent key means
+		// the default policy, which is the case for every table that does not
+		// opt into Dorsid ids.
+		let id_generation = txn.get_tb_id_generation(ns, db, table, version).await?;
 		// Build the document context
 		if let Some(cache) = cache {
 			// Fetch the definitions
@@ -181,6 +195,7 @@ impl NsDbTbCtx {
 				db: Arc::clone(&parent.db),
 				tb,
 				fields,
+				id_generation,
 				id_field_idx,
 			})
 		} else {
@@ -194,6 +209,7 @@ impl NsDbTbCtx {
 				db: Arc::clone(&parent.db),
 				tb,
 				fields,
+				id_generation,
 				id_field_idx,
 			})
 		}
@@ -227,6 +243,16 @@ pub(crate) struct NsDbTbMutCtx {
 	/// The table's live query subscriptions, notified after the record is
 	/// written.
 	pub(crate) lives: Arc<[SubscriptionDefinition]>,
+	/// The table's Dorsid id-generation policy, read from the fork-owned `!ig`
+	/// sidecar key (see [`crate::key::table::ig`]). Loaded once per statement
+	/// alongside the other per-table definitions rather than per record.
+	///
+	/// Deliberately *not* served from the datastore cache: that cache keys on
+	/// the `cache_*_ts` stamps carried by `TableDefinition`, and the policy has
+	/// no such stamp. The per-transaction read cache underneath `txn.get`
+	/// already collapses repeat reads, and going through the transaction keeps
+	/// the policy consistent with the rest of the statement's catalog view.
+	pub(crate) id_generation: IdGeneration,
 	/// Index into `fields` of the `id` field definition, if one is defined.
 	/// Precomputed once so the write path can read the id field's kind and
 	/// default in O(1) without rescanning the field list per record.
@@ -259,6 +285,10 @@ impl NsDbTbMutCtx {
 			None => ctx.get_cache(),
 			Some(_) => None,
 		};
+		// Fetch the fork's per-table id-generation policy. An absent key means
+		// the default policy, which is the case for every table that does not
+		// opt into Dorsid ids.
+		let id_generation = txn.get_tb_id_generation(ns, db, table, version).await?;
 		// Build the document context
 		if let Some(cache) = cache {
 			// Fetch the fields
@@ -340,6 +370,7 @@ impl NsDbTbMutCtx {
 				tables,
 				indexes,
 				lives,
+				id_generation,
 				id_field_idx,
 			})
 		} else {
@@ -363,6 +394,7 @@ impl NsDbTbMutCtx {
 				tables,
 				indexes,
 				lives,
+				id_generation,
 				id_field_idx,
 			})
 		}
@@ -448,6 +480,20 @@ impl DocumentContext {
 			)),
 			DocumentContext::NsDbTbCtx(ctx) => Ok(&ctx.tb),
 			DocumentContext::NsDbTbMutCtx(ctx) => Ok(&ctx.tb),
+		}
+	}
+
+	/// Get the table's Dorsid id-generation policy (fork-local).
+	///
+	/// Returns [`IdGeneration::Default`] when there is no table in context,
+	/// rather than erroring: the default policy is exactly what a table-less
+	/// context implies, and the caller (`generate_default_id`) is only reached
+	/// on paths that do have a table.
+	pub(crate) fn id_generation(&self) -> IdGeneration {
+		match self {
+			DocumentContext::NsDbCtx(_) => IdGeneration::Default,
+			DocumentContext::NsDbTbCtx(ctx) => ctx.id_generation,
+			DocumentContext::NsDbTbMutCtx(ctx) => ctx.id_generation,
 		}
 	}
 

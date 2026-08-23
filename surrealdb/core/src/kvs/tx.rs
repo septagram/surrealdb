@@ -36,8 +36,8 @@ use crate::catalog::providers::{
 	DatabaseProvider, NamespaceProvider, NodeProvider, RootProvider, TableProvider, UserProvider,
 };
 use crate::catalog::{
-	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig, IndexId,
-	NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
+	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig,
+	IdGeneration, IndexId, NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
 };
 use crate::cf::Changefeed;
 use crate::cnf::CommonConfig;
@@ -1274,6 +1274,25 @@ impl Transaction {
 		let found = self.tr.exists(key, version).await.map_err(Error::from)?;
 		self.metrics.record_get(u64::from(found), key_bytes, 0);
 		Ok(found)
+	}
+
+	/// Fetch a table's Dorsid id-generation policy (fork-local).
+	///
+	/// The policy lives under the fork-owned `!ig` key rather than on
+	/// [`TableDefinition`], so that the fork never occupies a revision number in
+	/// a struct upstream also extends. See [`crate::key::table::ig`].
+	///
+	/// An absent key means [`IdGeneration::Default`], which is the case for
+	/// every table that has not opted into Dorsid ids.
+	pub async fn get_tb_id_generation(
+		&self,
+		ns: NamespaceId,
+		db: DatabaseId,
+		tb: &crate::val::TableName,
+		version: Option<u64>,
+	) -> Result<IdGeneration> {
+		let key = crate::key::table::ig::new(ns, db, tb);
+		Ok(self.get(&key, version).await?.unwrap_or_default())
 	}
 
 	/// Fetch a key from the datastore.

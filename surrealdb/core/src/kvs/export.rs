@@ -347,7 +347,13 @@ impl Transaction {
 		chn.send(bytes!(format!("-- TABLE: {}", InlineCommentDisplay(&table.name)))).await?;
 		chn.send(bytes!("-- ------------------------------")).await?;
 		chn.send(bytes!("")).await?;
-		chn.send(bytes!(format!("{};", table.to_sql()))).await?;
+		// Fork-local: render the table with its `!ig` sidecar policy so an
+		// exported `DEFINE TABLE` carries the `ID SID` / `ID RID` clause and
+		// round-trips through import. Default-policy tables export exactly as
+		// upstream does.
+		let id_generation = self.get_tb_id_generation(ns, db, &table.name, None).await?;
+		let definition = table.to_sql_definition_with_id_generation(id_generation);
+		chn.send(bytes!(format!("{};", definition.to_sql()))).await?;
 		chn.send(bytes!("")).await?;
 		// Export all table field definitions with OVERWRITE to ensure
 		// idempotent re-import (relation tables auto-generate in/out fields,

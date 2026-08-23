@@ -142,7 +142,6 @@ impl DefineTableStatement {
 			drop: self.drop,
 			schemafull: self.full,
 			table_type: self.table_type.clone(),
-			id_generation: self.id_generation,
 			view: self.view.clone().map(|v| v.to_definition()).transpose()?,
 			permissions: self.permissions.clone(),
 			comment,
@@ -167,6 +166,22 @@ impl DefineTableStatement {
 
 		// Update the catalog
 		let tb = txn.put_tb(ns_name, db_name, &tb_def).await?;
+
+		// Persist the fork's per-table id-generation policy in its own key
+		// rather than as a `TableDefinition` field, so the fork never writes
+		// into a revision namespace upstream owns. Writing it here — after
+		// `put_tb`, before the view handling below — means a table redefined as
+		// a view has its policy swept by that branch's `delp`, which is the
+		// behaviour we want: views do not mint ids.
+		//
+		// The `Default` arm deletes rather than writes, so `DEFINE TABLE
+		// OVERWRITE` without an `ID` clause resets a table back to upstream
+		// behaviour and leaves no fork key behind.
+		let id_generation_key = crate::key::table::ig::new(ns.namespace_id, db.database_id, &name);
+		match self.id_generation {
+			IdGeneration::Default => txn.del(&id_generation_key).await?,
+			policy => txn.set(&id_generation_key, &policy).await?,
+		}
 
 		// Clear the cache
 		txn.clear_cache();

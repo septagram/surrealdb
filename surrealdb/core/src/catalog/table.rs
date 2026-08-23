@@ -60,7 +60,7 @@ impl revision::WalkRevisioned for TableId {
 	}
 }
 
-#[revisioned(revision = 4)]
+#[revisioned(revision = 3)]
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TableDefinition {
 	pub(crate) namespace_id: NamespaceId,
@@ -74,16 +74,6 @@ pub struct TableDefinition {
 	pub(crate) changefeed: Option<ChangeFeed>,
 	pub(crate) comment: Option<String>,
 	pub(crate) table_type: TableType,
-	/// How auto-generated record ids are minted on this table (Dorsid fork).
-	///
-	/// Fork-local field, so it must claim a revision upstream has not used.
-	/// Upstream took revision 3 for `cache_lives_ts` in the 3.2 line, so this
-	/// moved 3 -> 4 during that rebase; bytes written by upstream at revision 3
-	/// decode with `IdGeneration::default()`. Any future rebase must re-check
-	/// this against upstream's `revisioned(revision = N)` and bump again if
-	/// upstream has since consumed 4.
-	#[revision(start = 4)]
-	pub(crate) id_generation: IdGeneration,
 
 	/// The last time that a DEFINE FIELD was added to this table
 	pub(crate) cache_fields_ts: Uuid,
@@ -138,7 +128,6 @@ impl TableDefinition {
 			changefeed: None,
 			comment: None,
 			table_type: TableType::default(),
-			id_generation: IdGeneration::default(),
 			cache_fields_ts: now,
 			cache_events_ts: now,
 			cache_tables_ts: now,
@@ -173,7 +162,6 @@ impl TableDefinition {
 				.map(|v| sql::Expr::Literal(sql::Literal::String(v.into())))
 				.unwrap_or(sql::Expr::Literal(sql::Literal::None)),
 			table_type: self.table_type.clone().into(),
-			id_generation: self.id_generation.into(),
 			graphql_alias: self.graphql_alias.clone(),
 			graphql_deprecated: self.graphql_deprecated.clone(),
 			..Default::default()
@@ -194,7 +182,6 @@ impl InfoStructure for TableDefinition {
 			"drop" => self.drop.into(),
 			"schemafull" => self.schemafull.into(),
 			"kind" => self.table_type.structure(),
-			"id_generation" => self.id_generation.structure(),
 			"view", if let Some(v) = self.view => v.structure(),
 			"changefeed", if let Some(v) = self.changefeed => v.structure(),
 			"permissions" => self.permissions.structure(),
@@ -209,9 +196,29 @@ impl InfoStructure for TableDefinition {
 /// How a table's auto-generated record ids are minted when a row is created
 /// without an explicit `id` field.
 ///
-/// - `Default`: existing random string ids, preserving upstream behavior.
+/// - `Default`: upstream behaviour — a random string key, or whatever the `id` field's declared
+///   kind implies (see `Document::generate_typed_id`).
 /// - `Sid`: Dorsid `Sid`, a monotonic i64 with per-table warm-up from stored keys.
 /// - `Rid`: Dorsid `Rid`, a stateless persistent i64 from CSPRNG entropy.
+///
+/// # Fork-owned revision namespace
+///
+/// This value is **not** a field on [`TableDefinition`]. It is persisted on its
+/// own under the fork-owned `!ig` key (see [`crate::key::table::ig`]), which
+/// means its revision number belongs solely to this fork: upstream can never
+/// collide with it, and bumping it is a local decision with no rebase risk.
+///
+/// It briefly *was* a `TableDefinition` field, and that is exactly what went
+/// wrong — upstream took the same revision number for a different field in the
+/// 3.2 line and the two layouts became indistinguishable. See
+/// `customware/README.md` for the rule that came out of it.
+///
+/// Per-policy configuration should therefore ride the variants (for example a
+/// future `Rid { warmup: u32 }`) and bump this type to revision 2, rather than
+/// being bolted onto an upstream-owned struct.
+///
+/// An absent `!ig` key means [`IdGeneration::Default`]; no key is written for
+/// the default policy.
 #[revisioned(revision = 1)]
 #[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
 pub enum IdGeneration {
@@ -221,6 +228,8 @@ pub enum IdGeneration {
 	Rid,
 }
 
+impl_kv_value_revisioned!(IdGeneration);
+
 impl InfoStructure for IdGeneration {
 	fn structure(self) -> Value {
 		match self {
@@ -228,6 +237,45 @@ impl InfoStructure for IdGeneration {
 			IdGeneration::Sid => "SID".into(),
 			IdGeneration::Rid => "RID".into(),
 		}
+	}
+}
+
+/// Fork-local renderers that join a table definition with its sidecar
+/// [`IdGeneration`] policy.
+///
+/// These are kept in their own `impl` block, separate from the upstream one, so
+/// the upstream methods stay textually identical and drop out of the rebase
+/// conflict surface. Callers that have transaction access (INFO, export) fetch
+/// the `!ig` key and use these; everything else keeps rendering upstream's shape.
+///
+/// Both omit the policy entirely when it is [`IdGeneration::Default`], so a
+/// table that does not use Dorsid ids produces output byte-identical to
+/// upstream's.
+impl TableDefinition {
+	/// Like `to_sql_definition`, but carries the table's id-generation policy so
+	/// the rendered DDL includes the `ID SID` / `ID RID` clause.
+	pub(crate) fn to_sql_definition_with_id_generation(
+		&self,
+		id_generation: IdGeneration,
+	) -> DefineTableStatement {
+		DefineTableStatement {
+			id_generation: id_generation.into(),
+			..self.to_sql_definition()
+		}
+	}
+
+	/// Like [`InfoStructure::structure`], but includes an `id_generation` key
+	/// when the policy is not the default.
+	pub(crate) fn structure_with_id_generation(self, id_generation: IdGeneration) -> Value {
+		let structured = self.structure();
+		if id_generation == IdGeneration::Default {
+			return structured;
+		}
+		let Value::Object(mut object) = structured else {
+			return structured;
+		};
+		object.insert("id_generation".to_string(), id_generation.structure());
+		Value::Object(object)
 	}
 }
 

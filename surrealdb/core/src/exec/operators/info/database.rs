@@ -157,7 +157,17 @@ async fn execute_database_info(
 			"modules" => crate::expr::statements::info::process_modules(ctx.ctx(), ns, db, txn.all_db_modules(ns, db, version).await?).await,
 			"models" => process(&txn.all_db_models(ns, db, version).await?),
 			"params" => process(&txn.all_db_params(ns, db, version).await?),
-			"tables" => process(&txn.all_tb(ns, db, version).await?),
+			"tables" => {
+			// Fork-local: join each table with its `!ig` sidecar policy so
+			// `INFO ... STRUCTURE` reports `id_generation` for Dorsid tables.
+			// Tables on the default policy render exactly as upstream does.
+			let mut values = Vec::new();
+			for v in txn.all_tb(ns, db, version).await?.iter() {
+				let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
+				values.push(v.clone().structure_with_id_generation(ig));
+			}
+			Value::Array(values.into())
+			},
 			"users" => process(&txn.all_db_users(ns, db, version).await?),
 			"configs" => process(&txn.all_db_configs(ns, db, version).await?),
 			"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
@@ -224,7 +234,13 @@ async fn execute_database_info(
 			"tables" => {
 				let mut out = Object::default();
 				for v in txn.all_tb(ns, db, version).await?.iter() {
-					out.insert(v.name.clone(), v.to_sql().into());
+					// Fork-local: render the `ID SID` / `ID RID` clause from the
+					// sidecar policy. Default-policy tables render as upstream.
+					let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
+					out.insert(
+						v.name.clone(),
+						v.to_sql_definition_with_id_generation(ig).to_sql().into(),
+					);
 				}
 				out.into()
 			},

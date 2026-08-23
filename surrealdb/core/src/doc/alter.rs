@@ -202,7 +202,7 @@ impl Document {
 		id_kind: Option<&Kind>,
 	) -> Result<RecordId> {
 		let tb_def = Arc::clone(self.doc_ctx.tb()?);
-		match tb_def.id_generation {
+		match self.doc_ctx.id_generation() {
 			IdGeneration::Default => Self::generate_typed_id(&tb, id_kind),
 			IdGeneration::Rid => {
 				let rid = dorsid::rid::next_persistent(None)

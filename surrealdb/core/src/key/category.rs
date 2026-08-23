@@ -128,6 +128,9 @@ pub enum Category {
 	IndexDefinition,
 	/// crate::key::table::lq                /*{ns}*{db}*{tb}!lq{lq}
 	TableLiveQuery,
+	/// crate::key::table::ig                /*{ns}*{db}*{tb}!ig
+	/// Fork-local: per-table Dorsid id-generation policy (customware/001).
+	TableIdGeneration,
 	///
 	/// ------------------------------
 	///
@@ -268,6 +271,7 @@ impl Display for Category {
 			Self::TableView => "TableView",
 			Self::IndexDefinition => "IndexDefinition",
 			Self::TableLiveQuery => "TableLiveQuery",
+			Self::TableIdGeneration => "TableIdGeneration",
 			Self::IndexRoot => "IndexRoot",
 			Self::IndexTermDocList => "IndexTermDocList",
 			Self::IndexBTreeNode => "IndexBTreeNode",
