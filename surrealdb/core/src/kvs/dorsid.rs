@@ -187,3 +187,85 @@ impl std::fmt::Debug for SidRegistry {
 			.finish()
 	}
 }
+
+#[cfg(all(test, feature = "kv-surrealkv"))]
+mod tests {
+	use surrealdb_types::{RecordIdKey, Value};
+	use temp_dir::TempDir;
+
+	use crate::dbs::Session;
+	use crate::kvs::Datastore;
+
+	/// Run a statement and fail loudly if any result in it errored.
+	///
+	/// `Datastore::execute` returns `Ok` for a batch whose statements failed —
+	/// the per-statement error is inside the `QueryResult` — so a bare
+	/// `.expect()` on the outer result silently ignores DDL failures.
+	async fn execute_ok(ds: &Datastore, session: &Session, sql: &str) {
+		let results = ds.execute(sql, session, None).await.expect("execute should dispatch");
+		for result in results {
+			result.result.unwrap_or_else(|e| panic!("statement failed: {sql}: {e}"));
+		}
+	}
+
+	/// Extract the integer record-id key from a `CREATE ... RETURN VALUE id`
+	/// response.
+	async fn create_sid(ds: &Datastore, session: &Session) -> i64 {
+		let mut res = ds
+			.execute("CREATE ONLY sid_tb RETURN VALUE id", session, None)
+			.await
+			.expect("create should succeed");
+		let value = res.remove(0).result.expect("create should not error");
+		let Value::RecordId(rid) = value else {
+			panic!("expected a record id, got {value:?}");
+		};
+		match rid.key {
+			RecordIdKey::Number(n) => n,
+			other => panic!("expected an integer Sid key, got {other:?}"),
+		}
+	}
+
+	/// The Sid generator is process-local: a fresh `Datastore` over an existing
+	/// store starts with an empty registry and must warm its floor from the
+	/// highest Sid already persisted, or it would re-mint ids that already
+	/// exist.
+	///
+	/// This is the one part of the Sid path that a fresh-datastore test cannot
+	/// reach, and it is also the part that protects against clock regression,
+	/// so it gets a dedicated restart test over a real on-disk backend.
+	#[tokio::test]
+	async fn sid_floor_warms_from_stored_keys_after_restart() {
+		let dir = TempDir::new().expect("temp dir");
+		let path = format!("surrealkv://{}", dir.child("warmup.skv").display());
+		let session = Session::owner().with_ns("test").with_db("test");
+
+		// First boot: define an `ID SID` table and mint a few ids.
+		let highest = {
+			let ds = Datastore::new(&path).await.expect("open datastore");
+			execute_ok(
+				&ds,
+				&session,
+				"DEFINE NAMESPACE test; DEFINE DATABASE test; DEFINE TABLE sid_tb ID SID",
+			)
+			.await;
+
+			let mut highest = i64::MIN;
+			for _ in 0..3 {
+				highest = highest.max(create_sid(&ds, &session).await);
+			}
+			ds.shutdown().await.expect("shutdown");
+			highest
+		};
+
+		// Second boot over the same store: the registry is empty, so the next
+		// mint must come from a floor seeded by scanning what is on disk.
+		let ds = Datastore::new(&path).await.expect("reopen datastore");
+		let after_restart = create_sid(&ds, &session).await;
+
+		assert!(
+			after_restart > highest,
+			"Sid after restart ({after_restart}) must exceed the highest persisted id \
+			 ({highest}); the generator did not warm its floor from stored keys"
+		);
+	}
+}
