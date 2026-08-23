@@ -314,3 +314,68 @@ harness began calling `iam::signup` / `iam::signin`, which 002 gates behind
 `auth`, so the harness stopped compiling. The previous update needed
 `ec96508e2` for the identical reason in the server crate. No stored patch can
 anticipate this; expect one such fix per update and budget for it.
+
+---
+
+# Addendum: sidecar storage (v3.2.4-customware.5, 2026-08-24)
+
+Plan: `26c-mosaic-same-dimmed`. This is a follow-up cadence on the same upstream
+version, not a new update.
+
+## What it did
+
+Moved customware/001's `id_generation` off `TableDefinition` and into a
+fork-owned `!ig` key, retiring the revision-collision hazard this file describes
+under "Revision collision on `TableDefinition`" rather than deferring it one
+rebase at a time. `customware/README.md` now carries the resulting policy —
+**fork data lives only in fork-owned keyspace** — and the two-dimensional
+revision scheme that was designed as the alternative and deliberately not built.
+
+Also landed `ALTER TABLE ... ID`, definition-time rejection of a policy that
+contradicts the `id` field's kind, and the end-to-end `ID SID` / `ID RID`
+coverage the feature had never had.
+
+## Consequences for this file's earlier findings
+
+- **The revision-4 hazard is gone, not documented.** The field no longer exists,
+  so the standing "re-check upstream's revision number on every rebase" warning
+  is retired along with it. The two review findings about that break (the
+  compatibility direction and the misleading mitigation note) are resolved by
+  deletion.
+- **The fork's compat snapshot is deleted.** `v3_2_4_customware.rs` and its 124
+  fixtures are gone; `v3_2_2` carries the byte-exact wire-stability assertion
+  again, which is the proof `TableDefinition` re-converged with upstream.
+- **Three test files reverted to upstream verbatim**: `catalog/test.rs`,
+  `cf/mutations.rs`, and `language/statements/info/subquery.surql`. The
+  "inherited failures this update fixed" section above is now moot for those
+  two `cf::mutations` cases and `subquery.surql` — they stopped diverging rather
+  than being fixed.
+
+Net effect on the fork's size: the sidecar commit alone removed 977 more lines
+than it added.
+
+## Patch regeneration
+
+001 was re-authored in place (README explains why the tag suffix is an event
+counter rather than an entry count). 001 and 002 were regenerated; 003 and 004
+were untouched and left byte-exact.
+
+Four files are genuinely shared between 001 and 002 — `Cargo.toml`,
+`surrealdb/core/Cargo.toml`, `surrealdb/core/src/kvs/ds.rs`, and
+`surrealdb/core/src/err/mod.rs`. They are split by commit range so each entry
+carries only its own hunks:
+
+```bash
+git diff v3.2.4 HEAD      -- <001-exclusive> ':(exclude)customware'
+git diff v3.2.4 ffe002749 -- <shared>        ':(exclude)customware'   # 001's share
+git diff ffe002749 HEAD   -- <shared>        ':(exclude)customware'   # 002's share
+```
+
+**Known attribution wrinkle:** `err/mod.rs` became shared only in this cadence,
+when 001 added the `IdGenerationKindConflict` variant to a file 002 already
+gated. The range split puts that variant in **002's** patch even though it
+belongs to 001. Composition is unaffected and was verified; if 002 is ever
+dropped, move the variant to 001 by hand rather than deleting it.
+
+Composition verified as always: applying 001 → 002 → 003 → 004 onto a clean
+v3.2.4 worktree reproduces `HEAD` byte-for-byte, excluding `customware/`.

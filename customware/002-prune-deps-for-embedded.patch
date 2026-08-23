@@ -235,26 +235,6 @@ index 59e0e7d6a..f3bd15afb 100644
  native-tls = [
      "dep:native-tls",
      "reqwest?/native-tls",
-diff --git a/surrealdb/core/src/err/mod.rs b/surrealdb/core/src/err/mod.rs
-index 9e99c4be5..579f93484 100644
---- a/surrealdb/core/src/err/mod.rs
-+++ b/surrealdb/core/src/err/mod.rs
-@@ -8,6 +8,7 @@ use base64::DecodeError as Base64Error;
- use ext_sort::SortError;
- use fst::Error as FstError;
- use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
-+#[cfg(feature = "auth")]
- use jsonwebtoken::errors::Error as JWTError;
- use object_store::Error as ObjectStoreError;
- use revision::Error as RevisionError;
-@@ -1377,6 +1378,7 @@ impl From<Base64Error> for Error {
- 	}
- }
- 
-+#[cfg(feature = "auth")]
- impl From<JWTError> for Error {
- 	fn from(_: JWTError) -> Error {
- 		Error::InvalidAuth
 diff --git a/surrealdb/core/src/expr/algorithm.rs b/surrealdb/core/src/expr/algorithm.rs
 index 40415640c..522a73ab9 100644
 --- a/surrealdb/core/src/expr/algorithm.rs
@@ -898,6 +878,46 @@ index eb6ae1c9c..3332fd76f 100644
  surrealdb-protocol = { workspace = true, features = ["proto", "flatbuffers", "rpc"] }
  tokio = { workspace = true, default-features = false, features = [
      "macros",
+diff --git a/surrealdb/core/src/err/mod.rs b/surrealdb/core/src/err/mod.rs
+index 9e99c4be5..a90bae30e 100644
+--- a/surrealdb/core/src/err/mod.rs
++++ b/surrealdb/core/src/err/mod.rs
+@@ -8,6 +8,7 @@ use base64::DecodeError as Base64Error;
+ use ext_sort::SortError;
+ use fst::Error as FstError;
+ use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
++#[cfg(feature = "auth")]
+ use jsonwebtoken::errors::Error as JWTError;
+ use object_store::Error as ObjectStoreError;
+ use revision::Error as RevisionError;
+@@ -1296,6 +1297,19 @@ pub(crate) enum Error {
+ 		kind: String,
+ 	},
+ 
++	/// A table's Dorsid id-generation policy cannot satisfy its declared `id`
++	/// kind. Fork-local (customware/001): `SID` and `RID` mint 64-bit integer
++	/// keys, so an `id` field that cannot hold an integer would reject every
++	/// insert at runtime. Rejected at definition time instead.
++	#[error(
++		"Table `{table}` uses `ID {policy}`, which generates integer record ids, but its `id` field is declared as `{kind}`. Declare the `id` field as `int`, `number` or `any`, or use `ID DEFAULT`."
++	)]
++	IdGenerationKindConflict {
++		table: String,
++		policy: String,
++		kind: String,
++	},
++
+ 	#[error(
+ 		"Error with the event {0}. The ID of the namespace `{1}` does not match the namespace this event has been generated from."
+ 	)]
+@@ -1377,6 +1391,7 @@ impl From<Base64Error> for Error {
+ 	}
+ }
+ 
++#[cfg(feature = "auth")]
+ impl From<JWTError> for Error {
+ 	fn from(_: JWTError) -> Error {
+ 		Error::InvalidAuth
 diff --git a/surrealdb/core/src/kvs/ds.rs b/surrealdb/core/src/kvs/ds.rs
 index c3acc1f8b..316dd75f8 100644
 --- a/surrealdb/core/src/kvs/ds.rs

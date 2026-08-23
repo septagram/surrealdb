@@ -1,5 +1,12 @@
 # Dorsid Sid/Rid as first-class SurrealDB record IDs
 
+> **Re-authored 2026-08-24 (v3.2.4-customware.5).** The design below is the
+> original plan and still describes the feature accurately, with **one
+> structural exception**: the per-table policy is no longer a field on
+> `TableDefinition`. It lives under a fork-owned `!ig` sidecar key. See
+> "v3.2.4 sidecar storage" at the end of this file for what changed and why,
+> and `customware/README.md` for the general rule it established.
+
 ## Context
 
 Today, when SurrealDB creates a record without an explicit `id`, it generates a 20-character random alphanumeric string (`Document::generate_record_id` → `RecordIdKey::rand`). For the user's projects, neither random strings nor ULIDs are the desired key format — the project uses **Dorsid** IDs (from the sibling crate at `../diceware-ordinal/dorsid`):
@@ -24,6 +31,10 @@ DEFINE TABLE foo SCHEMAFULL ID default       -- explicit default (== omitted)
 DEFINE TABLE foo SCHEMAFULL ID sid
 DEFINE TABLE foo SCHEMAFULL ID rid
 ```
+
+**Superseded in part:** the clause and its semantics are unchanged, but the
+resulting policy is persisted under the `!ig` key rather than on
+`TableDefinition`, and `INFO` / DDL emit it only when it is not `default`.
 
 Three kinds, all explicitly parseable; omitted clause = `default` semantics (20-char random string, current behavior). `ID default` and the omitted form must produce identical `TableDefinition` state and the same DDL on round-trip (`INFO FOR DB` re-emits the explicit form when the user wrote it, or normalizes to omitted — pick whichever is easier; both are acceptable as long as the chosen normalization is consistent). Matches the one-keyword-with-value pattern of existing options (`TYPE NORMAL`, `PERMISSIONS NONE`). The token `ID` is not currently a top-level `DEFINE TABLE` option, so no parser conflict.
 
@@ -197,3 +208,83 @@ d85c5305 Parse DEFINE TABLE ... ID [default|sid|rid]
   DEFAULT|SID|RID`.
 - Verified the reimplementation with
   `cargo check -p surrealdb-core --no-default-features --features kv-mem`.
+
+
+---
+
+## v3.2.4 sidecar storage (re-authored 2026-08-24)
+
+Plan: `26c-mosaic-same-dimmed`. This section supersedes the original plan's
+persistence decision; everything else in this file still holds.
+
+### What changed
+
+`IdGeneration` was a `#[revision(start = 3)]` field on `TableDefinition`. It is
+now a fork-owned revisioned value stored under a table-scoped `!ig` key
+(`surrealdb/core/src/key/table/ig.rs`). `TableDefinition` is byte-identical to
+upstream v3.2.4 again.
+
+### Why
+
+Upstream took revision 3 for `cache_lives_ts` in the 3.2 line, colliding with
+this entry's field. Two layouts wore one revision number and data written by
+either side misdecoded on the other. Bumping to revision 4 fixed the upstream
+direction and broke the fork's own prior data, and would have had to be repeated
+at every future upstream bump — each one a breaking data change.
+
+The full reasoning, the rejected alternative (a two-dimensional revision scheme
+requiring a fork of the `revision` proc-macro crates), and the general rule are
+in `customware/README.md`. Read that before touching persistence in this fork
+again.
+
+### Shape
+
+- **Key**: `/*{ns}*{db}*{tb} !ig`, built on `key::table::all::TableRoot`.
+  Removed automatically by the single prefix delete in `REMOVE TABLE`; also
+  swept when a table is redefined as a view or compacted by ALTER, which
+  correctly resets the policy in both cases.
+- **Absent key means `IdGeneration::Default`.** No key is written for the
+  default policy, so a table that does not use Dorsid ids leaves no fork trace
+  in the keyspace.
+- **Read**: once per (statement, table) in `NsDbTbCtx::load` /
+  `NsDbTbMutCtx::load` via `Transaction::get_tb_id_generation`, beside the other
+  per-table definitions. Deliberately not served from the datastore cache, which
+  keys on the `cache_*_ts` stamps that only exist for `TableDefinition` data.
+- **Write**: `DEFINE TABLE` after `put_tb` (before the view branch, so a view
+  redefinition sweeps it), and `ALTER TABLE ... ID`. `Default` deletes rather
+  than writes.
+- **Render**: `INFO` and export join the policy back in and emit it only when
+  non-default, so non-Dorsid tables produce upstream-identical output.
+
+### Future configuration goes on the variants
+
+Per-policy configuration — a planned `Rid { warmup: u32 }` for the Rid free-list
+— rides the enum variants and bumps `IdGeneration` to revision 2. That is a free
+bump on a fork-owned type: no upstream collision is possible.
+
+### Also added in this cadence
+
+- `ALTER TABLE ... ID DEFAULT|SID|RID`.
+- Definition-time rejection of a policy that contradicts the `id` field's kind,
+  from both the DEFINE TABLE and DEFINE FIELD directions. An `id` field carrying
+  a `DEFAULT` is exempt, because that `DEFAULT` is evaluated before the policy is
+  consulted and the two never meet.
+- The end-to-end tests this entry never had:
+  `language/statements/define/table/id_generation.surql`,
+  `id_generation_lifecycle.surql`,
+  `language/statements/alter/alter_table_id_generation.surql`, and a Rust
+  restart test (`sid_floor_warms_from_stored_keys_after_restart`) covering the
+  Sid warm-up, which no fresh-datastore test can reach.
+
+### Known behaviour, pinned by test rather than changed
+
+An `id` field `DEFAULT` is evaluated before the `IdGeneration` dispatch, so
+field-level silently wins over `ID SID`. This is deliberate precedence, tested
+in `id_generation_lifecycle.surql`.
+
+### Data compatibility
+
+The rev-4 format briefly written by `v3.2.4-customware.4` is dead: no decode arm
+exists for it, and no database was created against it. Databases written by
+`v3.1.5-customware.3` (rev 3 with the field inline) are likewise unreadable.
+Both windows were days long and contained no real data.

@@ -103,3 +103,11 @@ Located in `surrealdb/tests/` and `tests/`. Follow standard Rust testing convent
 - Detailed cursor rules: `.cursor/rules/`
 - Contributing guide: `CONTRIBUTING.md`
 - Building instructions: `doc/BUILDING.md`
+
+## Fork divergence policy
+
+This is a customware fork of SurrealDB. Before changing anything that is
+persisted — a `#[revisioned]` struct, a KV value, a key layout — read
+`customware/README.md`. The short version: **fork data lives only in fork-owned
+keyspace; upstream-owned wire formats are never modified.** That rule exists
+because breaking it cost a data-compatibility bug and a full refactor to undo.

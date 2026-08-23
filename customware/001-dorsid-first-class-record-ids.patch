@@ -41,19 +41,345 @@ index c50a12c81..a88c492ab 100644
   "env_logger",
   "ext-sort",
   "fastnum",
-diff --git a/language-tests/tests/language/statements/info/subquery.surql b/language-tests/tests/language/statements/info/subquery.surql
-index 30c0c65d4..b89a50cc8 100644
---- a/language-tests/tests/language/statements/info/subquery.surql
-+++ b/language-tests/tests/language/statements/info/subquery.surql
-@@ -8,7 +8,7 @@ value = "NONE"
- value = "{ test: 'DEFINE TABLE test TYPE NORMAL SCHEMAFULL PERMISSIONS NONE' }"
- 
- [[test.results]]
--value = "[{ drop: false, id: 0, kind: { kind: 'NORMAL' }, name: 'test', permissions: { create: false, delete: false, select: false, update: false }, schemafull: true }]"
-+value = "[{ drop: false, id: 0, id_generation: 'DEFAULT', kind: { kind: 'NORMAL' }, name: 'test', permissions: { create: false, delete: false, select: false, update: false }, schemafull: true }]"
- 
- */
- DEFINE TABLE OVERWRITE test SCHEMAFULL;
+diff --git a/language-tests/tests/language/statements/alter/alter_table_id_generation.surql b/language-tests/tests/language/statements/alter/alter_table_id_generation.surql
+new file mode 100644
+index 000000000..bf858a247
+--- /dev/null
++++ b/language-tests/tests/language/statements/alter/alter_table_id_generation.surql
+@@ -0,0 +1,118 @@
++/**
++[test]
++reason = """
++`ALTER TABLE ... ID DEFAULT|SID|RID` (customware/001) plus the definition-time
++rejection of a policy that contradicts the table's declared `id` kind.
++
++Because the policy lives in a sidecar key rather than on `TableDefinition`, the
++ALTER path writes the key directly instead of patching the definition, so it
++needs its own coverage.
++"""
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "false"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++match = "$error CONTAINS 'which generates integer record ids'"
++error = true
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++match = "$error CONTAINS 'which generates integer record ids'"
++error = true
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++*/
++
++-- ALTER switches an existing table onto a Dorsid policy.
++DEFINE TABLE t;
++LET $before = (CREATE ONLY t RETURN VALUE id);
++type::is_string(record::id($before));
++ALTER TABLE t ID SID;
++LET $after = (CREATE ONLY t RETURN VALUE id);
++type::is_number(record::id($after));
++string::contains((INFO FOR DB).tables.t, "ID SID");
++
++-- ALTER ... ID DEFAULT switches it back off.
++ALTER TABLE t ID DEFAULT;
++LET $reverted = (CREATE ONLY t RETURN VALUE id);
++type::is_string(record::id($reverted));
++string::contains((INFO FOR DB).tables.t, " ID ");
++
++-- An ALTER that does not mention ID leaves the policy alone.
++ALTER TABLE t ID RID;
++ALTER TABLE t COMMENT "unrelated";
++LET $still_rid = (CREATE ONLY t RETURN VALUE id);
++type::is_number(record::id($still_rid));
++
++-- Definition-time rejection, from the DEFINE TABLE side.
++DEFINE TABLE conflict SCHEMAFULL;
++DEFINE FIELD id ON conflict TYPE uuid;
++DEFINE TABLE OVERWRITE conflict SCHEMAFULL ID SID;
++
++-- ...and from the DEFINE FIELD side.
++DEFINE TABLE conflict2 SCHEMAFULL ID SID;
++DEFINE FIELD id ON conflict2 TYPE uuid;
++
++-- An integer-compatible id kind is accepted.
++DEFINE TABLE ok_int SCHEMAFULL ID SID;
++DEFINE FIELD id ON ok_int TYPE int;
++type::is_number(record::id((CREATE ONLY ok_int RETURN VALUE id)));
+diff --git a/language-tests/tests/language/statements/define/table/id_generation.surql b/language-tests/tests/language/statements/define/table/id_generation.surql
+new file mode 100644
+index 000000000..dc4e06c1c
+--- /dev/null
++++ b/language-tests/tests/language/statements/define/table/id_generation.surql
+@@ -0,0 +1,118 @@
++/**
++[test]
++reason = """
++End-to-end coverage for the fork's `DEFINE TABLE ... ID DEFAULT|SID|RID` clause
++(customware/001). Until this file existed the feature had only a parser
++round-trip unit test and no behavioural coverage at all, while the dispatch
++underneath it was rewritten twice: once when upstream 3.2 introduced the
++id-field DEFAULT path and `coerce_id_key`, and once when the policy moved to a
++fork-owned sidecar key (customware/005).
++
++Sid and Rid values are time- and entropy-dependent, so nothing here asserts a
++literal id. Every check is a boolean.
++"""
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "'SID'"
++
++[[test.results]]
++value = "'RID'"
++
++[[test.results]]
++value = "NONE"
++
++*/
++
++-- One table per policy, plus the implicit (no clause) case.
++DEFINE TABLE sid_tb ID SID;
++DEFINE TABLE rid_tb ID RID;
++DEFINE TABLE default_tb ID DEFAULT;
++DEFINE TABLE implicit_tb;
++
++-- `ID SID` mints integer keys that strictly increase.
++LET $a = (CREATE ONLY sid_tb RETURN VALUE id);
++LET $b = (CREATE ONLY sid_tb RETURN VALUE id);
++type::is_number(record::id($a));
++record::id($b) > record::id($a);
++
++-- `ID RID` mints integer keys.
++LET $r = (CREATE ONLY rid_tb RETURN VALUE id);
++type::is_number(record::id($r));
++
++-- `ID DEFAULT` and the implicit form both keep upstream's random string key.
++LET $d = (CREATE ONLY default_tb RETURN VALUE id);
++type::is_string(record::id($d)) AND string::len(record::id($d)) == 20;
++
++LET $i = (CREATE ONLY implicit_tb RETURN VALUE id);
++type::is_string(record::id($i)) AND string::len(record::id($i)) == 20;
++
++-- The DDL round-trips the clause, and omits it for the default policy so that
++-- non-Dorsid tables render exactly as upstream renders them.
++LET $tables = (INFO FOR DB).tables;
++string::contains($tables.sid_tb, "ID SID");
++string::contains($tables.rid_tb, "ID RID");
++!string::contains($tables.default_tb, " ID ") AND !string::contains($tables.implicit_tb, " ID ");
++
++-- INFO ... STRUCTURE surfaces the policy only for the tables that use it; a
++-- default-policy table carries no `id_generation` key at all.
++LET $structured = (INFO FOR DB STRUCTURE).tables;
++$structured[WHERE name = "sid_tb"][0].id_generation;
++$structured[WHERE name = "rid_tb"][0].id_generation;
++$structured[WHERE name = "default_tb"][0].id_generation;
+diff --git a/language-tests/tests/language/statements/define/table/id_generation_lifecycle.surql b/language-tests/tests/language/statements/define/table/id_generation_lifecycle.surql
+new file mode 100644
+index 000000000..92eb41390
+--- /dev/null
++++ b/language-tests/tests/language/statements/define/table/id_generation_lifecycle.surql
+@@ -0,0 +1,85 @@
++/**
++[test]
++reason = """
++Lifecycle and precedence rules for the fork's `ID SID` / `ID RID` policy
++(customware/001, sidecar storage from customware/005).
++
++The policy lives in its own `!ig` key under the table root rather than on
++`TableDefinition`, so its lifecycle is not automatic — this pins the cases where
++it must be reset, plus the precedence rule that an `id` field `DEFAULT` wins
++over the table's policy.
++
++The opposite interaction — an `id` kind that cannot hold a Sid — is rejected at
++definition time and is covered by
++`language/statements/alter/alter_table_id_generation.surql`.
++"""
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "true"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "NONE"
++
++[[test.results]]
++value = "'pinned'"
++
++*/
++
++-- DEFINE TABLE OVERWRITE without an `ID` clause resets the policy to default.
++DEFINE TABLE reset_tb ID SID;
++LET $sid_id = (CREATE ONLY reset_tb RETURN VALUE id);
++type::is_number(record::id($sid_id));
++DEFINE TABLE OVERWRITE reset_tb;
++LET $after_overwrite = (CREATE ONLY reset_tb RETURN VALUE id);
++type::is_string(record::id($after_overwrite));
++
++-- REMOVE TABLE drops the policy with the rest of the table prefix, so a table
++-- redefined under the same name starts from the default again.
++DEFINE TABLE removed_tb ID RID;
++REMOVE TABLE removed_tb;
++DEFINE TABLE removed_tb;
++LET $after_remove = (CREATE ONLY removed_tb RETURN VALUE id);
++type::is_string(record::id($after_remove));
++
++-- An `id` field `DEFAULT` is evaluated before the table's `IdGeneration`
++-- policy, so it silently wins over `ID SID`. Field-level beats table-level.
++DEFINE TABLE default_wins ID SID SCHEMAFULL;
++DEFINE FIELD id ON default_wins TYPE string DEFAULT "pinned";
++LET $defaulted = (CREATE ONLY default_wins RETURN VALUE id);
++record::id($defaulted);
 diff --git a/rust-toolchain.toml b/rust-toolchain.toml
 index eedff1711..b33f8f084 100644
 --- a/rust-toolchain.toml
@@ -68,2461 +394,40 @@ index eedff1711..b33f8f084 100644
 +channel = "nightly"
  components = [ "rustfmt", "clippy" ]
  targets = ["wasm32-unknown-unknown"]
-diff --git a/surrealdb/core/src/catalog/compat/fixtures.rs b/surrealdb/core/src/catalog/compat/fixtures.rs
-index 253424b3b..ec8a3cffa 100644
---- a/surrealdb/core/src/catalog/compat/fixtures.rs
-+++ b/surrealdb/core/src/catalog/compat/fixtures.rs
-@@ -130,6 +130,7 @@ pub fn table_basic() -> TableDefinition {
- 		changefeed: None,
- 		comment: None,
- 		table_type: TableType::Normal,
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-@@ -165,6 +166,7 @@ pub fn table_with_view() -> TableDefinition {
- 		changefeed: None,
- 		comment: Some("User statistics view".to_string()),
- 		table_type: TableType::Normal,
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-@@ -192,6 +194,7 @@ pub fn table_schemafull() -> TableDefinition {
- 		}),
- 		comment: Some("Order records".to_string()),
- 		table_type: TableType::Normal,
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-@@ -227,6 +230,7 @@ pub fn table_relation() -> TableDefinition {
- 			to: vec![TableName::from("posts"), TableName::from("comments")],
- 			enforced: true,
- 		}),
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-@@ -255,6 +259,7 @@ pub fn table_with_materialized_view() -> TableDefinition {
- 		changefeed: None,
- 		comment: Some("Materialized view of active users".to_string()),
- 		table_type: TableType::Normal,
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-@@ -279,6 +284,7 @@ pub fn table_any_type() -> TableDefinition {
- 		changefeed: None,
- 		comment: None,
- 		table_type: TableType::Any,
-+		id_generation: IdGeneration::default(),
- 		cache_fields_ts: UuidExt::nil(),
- 		cache_events_ts: UuidExt::nil(),
- 		cache_tables_ts: UuidExt::nil(),
-diff --git a/surrealdb/core/src/catalog/compat/mod.rs b/surrealdb/core/src/catalog/compat/mod.rs
-index 559b6ad2c..df8c56359 100644
---- a/surrealdb/core/src/catalog/compat/mod.rs
-+++ b/surrealdb/core/src/catalog/compat/mod.rs
-@@ -51,3 +51,8 @@ mod v3_1_0;
- mod v3_1_1;
- #[rustfmt::skip]
- mod v3_2_2;
-+/// Fork-local snapshot: customware/001 advanced `TableDefinition` past
-+/// upstream's revision 3, so this fork writes a format no upstream release
-+/// emits. See the module docs and `tests.rs::version_writes_current_format`.
-+#[rustfmt::skip]
-+mod v3_2_4_customware;
-diff --git a/surrealdb/core/src/catalog/compat/tests.rs b/surrealdb/core/src/catalog/compat/tests.rs
-index b3525e70e..2b8ce5003 100644
---- a/surrealdb/core/src/catalog/compat/tests.rs
-+++ b/surrealdb/core/src/catalog/compat/tests.rs
-@@ -7,7 +7,9 @@
- //! Failing either check indicates a backwards compatibility regression.
- 
- use super::super::*;
--use super::{fixtures, v3_0_0, v3_0_0_beta_1, v3_0_0_beta_3, v3_1_0, v3_1_1, v3_2_2};
-+use super::{
-+	fixtures, v3_0_0, v3_0_0_beta_1, v3_0_0_beta_3, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware,
-+};
- use crate::cf::TableMutations;
- use crate::dbs::node::Node;
- use crate::idx::ft::fulltext::{DocLengthAndCount, TermDocument};
-@@ -48,12 +50,21 @@ use crate::val::{RecordId, RecordIdKey};
- /// writes revision 3, so re-encoding no longer reproduces the frozen 3.1.1
- /// bytes.
- ///
-+/// `v3_2_2` was demoted from current-format by this fork. customware/001 adds
-+/// `TableDefinition.id_generation`; upstream had already taken revision 3 for
-+/// `cache_lives_ts`, so the field moved to `#[revision(start = 4)]` and the
-+/// struct to revision 4. The decoder still reads 3.2.2's revision-3 `TABLE_*`
-+/// fixtures (`id_generation` defaults to `IdGeneration::Default`), but the
-+/// encoder now writes revision 4, so re-encoding no longer reproduces the
-+/// frozen 3.2.2 bytes. The fork's own snapshot `v3_2_4_customware` carries
-+/// the byte-exact assertion instead.
-+///
- /// When the write format advances again, capture a new `vX_Y_Z` snapshot
- /// and move the tag here.
- const fn version_writes_current_format(version_name: &str) -> bool {
- 	// Constant-folded at compile time per macro expansion via
- 	// `stringify!`. Compared as bytes so the match is `const`-eligible.
--	matches!(version_name.as_bytes(), b"v3_2_2")
-+	matches!(version_name.as_bytes(), b"v3_2_4_customware")
- }
- 
- /// Macro to generate backwards compatibility tests for a fixture across multiple versions.
-@@ -172,14 +183,14 @@ compat_test!(
- 	NamespaceDefinition,
- 	NAMESPACE_BASIC,
- 	fixtures::namespace_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	namespace_with_comment,
- 	NamespaceDefinition,
- 	NAMESPACE_WITH_COMMENT,
- 	fixtures::namespace_with_comment(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // DatabaseDefinition
-@@ -188,21 +199,21 @@ compat_test!(
- 	DatabaseDefinition,
- 	DATABASE_BASIC,
- 	fixtures::database_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	database_with_changefeed,
- 	DatabaseDefinition,
- 	DATABASE_WITH_CHANGEFEED,
- 	fixtures::database_with_changefeed(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	database_strict,
- 	DatabaseDefinition,
- 	DATABASE_STRICT,
- 	fixtures::database_strict(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // TableDefinition
-@@ -211,42 +222,42 @@ compat_test!(
- 	TableDefinition,
- 	TABLE_BASIC,
- 	fixtures::table_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_with_view,
- 	TableDefinition,
- 	TABLE_WITH_VIEW,
- 	fixtures::table_with_view(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_schemafull,
- 	TableDefinition,
- 	TABLE_SCHEMAFULL,
- 	fixtures::table_schemafull(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_relation,
- 	TableDefinition,
- 	TABLE_RELATION,
- 	fixtures::table_relation(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_with_materialized_view,
- 	TableDefinition,
- 	TABLE_WITH_MATERIALIZED_VIEW,
- 	fixtures::table_with_materialized_view(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_any_type,
- 	TableDefinition,
- 	TABLE_ANY_TYPE,
- 	fixtures::table_any_type(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // SubscriptionDefinition
-@@ -255,21 +266,21 @@ compat_test!(
- 	SubscriptionDefinition,
- 	SUBSCRIPTION_BASIC,
- 	fixtures::subscription_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	subscription_with_filters,
- 	SubscriptionDefinition,
- 	SUBSCRIPTION_WITH_FILTERS,
- 	fixtures::subscription_with_filters(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	subscription_with_vars,
- 	SubscriptionDefinition,
- 	SUBSCRIPTION_WITH_VARS,
- 	fixtures::subscription_with_vars(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // AccessDefinition
-@@ -278,35 +289,35 @@ compat_test!(
- 	AccessDefinition,
- 	ACCESS_BEARER,
- 	fixtures::access_bearer(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	access_with_authenticate,
- 	AccessDefinition,
- 	ACCESS_WITH_AUTHENTICATE,
- 	fixtures::access_with_authenticate(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	access_record,
- 	AccessDefinition,
- 	ACCESS_RECORD,
- 	fixtures::access_record(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	access_jwt_jwks,
- 	AccessDefinition,
- 	ACCESS_JWT_JWKS,
- 	fixtures::access_jwt_jwks(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	access_bearer_refresh,
- 	AccessDefinition,
- 	ACCESS_BEARER_REFRESH,
- 	fixtures::access_bearer_refresh(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // AccessGrant
-@@ -315,28 +326,28 @@ compat_test!(
- 	AccessGrant,
- 	GRANT_JWT,
- 	fixtures::grant_jwt(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	grant_revoked,
- 	AccessGrant,
- 	GRANT_REVOKED,
- 	fixtures::grant_revoked(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	grant_record,
- 	AccessGrant,
- 	GRANT_RECORD,
- 	fixtures::grant_record(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	grant_bearer,
- 	AccessGrant,
- 	GRANT_BEARER,
- 	fixtures::grant_bearer(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // AnalyzerDefinition
-@@ -345,14 +356,14 @@ compat_test!(
- 	AnalyzerDefinition,
- 	ANALYZER_BASIC,
- 	fixtures::analyzer_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	analyzer_with_tokenizers,
- 	AnalyzerDefinition,
- 	ANALYZER_WITH_TOKENIZERS,
- 	fixtures::analyzer_with_tokenizers(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // ApiDefinition
-@@ -361,21 +372,21 @@ compat_test!(
- 	ApiDefinition,
- 	API_BASIC,
- 	fixtures::api_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	api_with_middleware,
- 	ApiDefinition,
- 	API_WITH_MIDDLEWARE,
- 	fixtures::api_with_middleware(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	api_with_auth_limit,
- 	ApiDefinition,
- 	API_WITH_AUTH_LIMIT,
- 	fixtures::api_with_auth_limit(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // BucketDefinition
-@@ -384,14 +395,14 @@ compat_test!(
- 	BucketDefinition,
- 	BUCKET_BASIC,
- 	fixtures::bucket_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	bucket_readonly,
- 	BucketDefinition,
- 	BUCKET_READONLY,
- 	fixtures::bucket_readonly(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // ConfigDefinition
-@@ -400,28 +411,28 @@ compat_test!(
- 	ConfigDefinition,
- 	CONFIG_GRAPHQL,
- 	fixtures::config_graphql(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	config_default,
- 	ConfigDefinition,
- 	CONFIG_DEFAULT,
- 	fixtures::config_default(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	config_api,
- 	ConfigDefinition,
- 	CONFIG_API,
- 	fixtures::config_api(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	config_graphql_full,
- 	ConfigDefinition,
- 	CONFIG_GRAPHQL_FULL,
- 	fixtures::config_graphql_full(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // EventDefinition
-@@ -430,14 +441,14 @@ compat_test!(
- 	EventDefinition,
- 	EVENT_BASIC,
- 	fixtures::event_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	event_async,
- 	EventDefinition,
- 	EVENT_ASYNC,
- 	fixtures::event_async(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // FieldDefinition
-@@ -446,42 +457,42 @@ compat_test!(
- 	FieldDefinition,
- 	FIELD_BASIC,
- 	fixtures::field_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	field_with_type,
- 	FieldDefinition,
- 	FIELD_WITH_TYPE,
- 	fixtures::field_with_type(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	field_readonly,
- 	FieldDefinition,
- 	FIELD_READONLY,
- 	fixtures::field_readonly(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	field_flexible_with_reference,
- 	FieldDefinition,
- 	FIELD_FLEXIBLE_WITH_REFERENCE,
- 	fixtures::field_flexible_with_reference(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	field_with_default_set,
- 	FieldDefinition,
- 	FIELD_WITH_DEFAULT_SET,
- 	fixtures::field_with_default_set(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	field_record_type,
- 	FieldDefinition,
- 	FIELD_RECORD_TYPE,
- 	fixtures::field_record_type(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // FunctionDefinition
-@@ -490,14 +501,14 @@ compat_test!(
- 	FunctionDefinition,
- 	FUNCTION_BASIC,
- 	fixtures::function_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	function_with_args,
- 	FunctionDefinition,
- 	FUNCTION_WITH_ARGS,
- 	fixtures::function_with_args(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // IndexDefinition
-@@ -506,35 +517,35 @@ compat_test!(
- 	IndexDefinition,
- 	INDEX_BASIC,
- 	fixtures::index_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	index_unique,
- 	IndexDefinition,
- 	INDEX_UNIQUE,
- 	fixtures::index_unique(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	index_hnsw,
- 	IndexDefinition,
- 	INDEX_HNSW,
- 	fixtures::index_hnsw(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	index_fulltext,
- 	IndexDefinition,
- 	INDEX_FULLTEXT,
- 	fixtures::index_fulltext(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	index_count,
- 	IndexDefinition,
- 	INDEX_COUNT,
- 	fixtures::index_count(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // MlModelDefinition
-@@ -543,7 +554,7 @@ compat_test!(
- 	MlModelDefinition,
- 	MODEL_BASIC,
- 	fixtures::model_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // ParamDefinition
-@@ -552,14 +563,14 @@ compat_test!(
- 	ParamDefinition,
- 	PARAM_BOOL,
- 	fixtures::param_bool(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	param_string,
- 	ParamDefinition,
- 	PARAM_STRING,
- 	fixtures::param_string(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // SequenceDefinition
-@@ -568,14 +579,14 @@ compat_test!(
- 	SequenceDefinition,
- 	SEQUENCE_BASIC,
- 	fixtures::sequence_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	sequence_with_options,
- 	SequenceDefinition,
- 	SEQUENCE_WITH_OPTIONS,
- 	fixtures::sequence_with_options(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // UserDefinition
-@@ -584,21 +595,21 @@ compat_test!(
- 	UserDefinition,
- 	USER_BASIC,
- 	fixtures::user_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	user_with_durations,
- 	UserDefinition,
- 	USER_WITH_DURATIONS,
- 	fixtures::user_with_durations(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	user_db_base,
- 	UserDefinition,
- 	USER_DB_BASE,
- 	fixtures::user_db_base(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // Record
-@@ -608,7 +619,7 @@ compat_test!(
- 	RECORD_NONE,
- 	fixtures::record_none(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_null,
-@@ -616,7 +627,7 @@ compat_test!(
- 	RECORD_NULL,
- 	fixtures::record_null(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_bool,
-@@ -624,7 +635,7 @@ compat_test!(
- 	RECORD_BOOL,
- 	fixtures::record_bool(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_number_int,
-@@ -632,7 +643,7 @@ compat_test!(
- 	RECORD_NUMBER_INT,
- 	fixtures::record_number_int(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_number_float,
-@@ -640,7 +651,7 @@ compat_test!(
- 	RECORD_NUMBER_FLOAT,
- 	fixtures::record_number_float(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_number_decimal,
-@@ -648,7 +659,7 @@ compat_test!(
- 	RECORD_NUMBER_DECIMAL,
- 	fixtures::record_number_decimal(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_string,
-@@ -656,7 +667,7 @@ compat_test!(
- 	RECORD_STRING,
- 	fixtures::record_string(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_bytes,
-@@ -664,7 +675,7 @@ compat_test!(
- 	RECORD_BYTES,
- 	fixtures::record_bytes(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_duration,
-@@ -672,7 +683,7 @@ compat_test!(
- 	RECORD_DURATION,
- 	fixtures::record_duration(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_datetime,
-@@ -680,7 +691,7 @@ compat_test!(
- 	RECORD_DATETIME,
- 	fixtures::record_datetime(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_uuid,
-@@ -688,7 +699,7 @@ compat_test!(
- 	RECORD_UUID,
- 	fixtures::record_uuid(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_point,
-@@ -696,7 +707,7 @@ compat_test!(
- 	RECORD_GEOMETRY_POINT,
- 	fixtures::record_geometry_point(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_line,
-@@ -704,7 +715,7 @@ compat_test!(
- 	RECORD_GEOMETRY_LINE,
- 	fixtures::record_geometry_line(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_polygon,
-@@ -712,7 +723,7 @@ compat_test!(
- 	RECORD_GEOMETRY_POLYGON,
- 	fixtures::record_geometry_polygon(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_multi_point,
-@@ -720,7 +731,7 @@ compat_test!(
- 	RECORD_GEOMETRY_MULTI_POINT,
- 	fixtures::record_geometry_multi_point(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_multi_line,
-@@ -728,7 +739,7 @@ compat_test!(
- 	RECORD_GEOMETRY_MULTI_LINE,
- 	fixtures::record_geometry_multi_line(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_multi_polygon,
-@@ -736,7 +747,7 @@ compat_test!(
- 	RECORD_GEOMETRY_MULTI_POLYGON,
- 	fixtures::record_geometry_multi_polygon(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_geometry_collection,
-@@ -744,7 +755,7 @@ compat_test!(
- 	RECORD_GEOMETRY_COLLECTION,
- 	fixtures::record_geometry_collection(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_table,
-@@ -752,7 +763,7 @@ compat_test!(
- 	RECORD_TABLE,
- 	fixtures::record_table(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_recordid,
-@@ -760,7 +771,7 @@ compat_test!(
- 	RECORD_RECORDID,
- 	fixtures::record_recordid(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_file,
-@@ -768,7 +779,7 @@ compat_test!(
- 	RECORD_FILE,
- 	fixtures::record_file(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_range_unbounded,
-@@ -776,7 +787,7 @@ compat_test!(
- 	RECORD_RANGE_UNBOUNDED,
- 	fixtures::record_range_unbounded(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_range_bounded,
-@@ -784,7 +795,7 @@ compat_test!(
- 	RECORD_RANGE_BOUNDED,
- 	fixtures::record_range_bounded(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_regex,
-@@ -792,7 +803,7 @@ compat_test!(
- 	RECORD_REGEX,
- 	fixtures::record_regex(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_array,
-@@ -800,7 +811,7 @@ compat_test!(
- 	RECORD_ARRAY,
- 	fixtures::record_array(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_object,
-@@ -808,7 +819,7 @@ compat_test!(
- 	RECORD_OBJECT,
- 	fixtures::record_object(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_set,
-@@ -816,7 +827,7 @@ compat_test!(
- 	RECORD_SET,
- 	fixtures::record_set(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_with_metadata,
-@@ -824,7 +835,7 @@ compat_test!(
- 	RECORD_WITH_METADATA,
- 	fixtures::record_with_metadata(),
- 	fixtures::test_record_rid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	record_with_table_metadata,
-@@ -832,7 +843,7 @@ compat_test!(
- 	RECORD_WITH_TABLE_METADATA,
- 	fixtures::record_with_table_metadata(),
- 	fixtures::test_record_rid(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // MajorVersion
-@@ -841,14 +852,14 @@ compat_test!(
- 	MajorVersion,
- 	VERSION_1,
- 	fixtures::version_1(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	version_3,
- 	MajorVersion,
- 	VERSION_3,
- 	fixtures::version_3(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // ApiActionDefinition
-@@ -857,14 +868,14 @@ compat_test!(
- 	ApiActionDefinition,
- 	API_ACTION_BASIC,
- 	fixtures::api_action_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	api_action_multi_method,
- 	ApiActionDefinition,
- 	API_ACTION_MULTI_METHOD,
- 	fixtures::api_action_multi_method(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // Appending
-@@ -873,28 +884,28 @@ compat_test!(
- 	Appending,
- 	APPENDING_NONE,
- 	fixtures::appending_none(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	appending_old_values,
- 	Appending,
- 	APPENDING_OLD_VALUES,
- 	fixtures::appending_old_values(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	appending_new_values,
- 	Appending,
- 	APPENDING_NEW_VALUES,
- 	fixtures::appending_new_values(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	appending_both,
- 	Appending,
- 	APPENDING_BOTH,
- 	fixtures::appending_both(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // DocLengthAndCount
-@@ -903,7 +914,7 @@ compat_test!(
- 	DocLengthAndCount,
- 	DOC_LENGTH_AND_COUNT_BASIC,
- 	fixtures::doc_length_and_count_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // PrimaryAppending
-@@ -912,7 +923,7 @@ compat_test!(
- 	PrimaryAppending,
- 	PRIMARY_APPENDING_BASIC,
- 	fixtures::primary_appending_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // BatchValue
-@@ -921,7 +932,7 @@ compat_test!(
- 	BatchValue,
- 	BATCH_VALUE_BASIC,
- 	fixtures::batch_value_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // SequenceState
-@@ -930,7 +941,7 @@ compat_test!(
- 	SequenceState,
- 	SEQUENCE_STATE_BASIC,
- 	fixtures::sequence_state_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // TaskLease
-@@ -939,7 +950,7 @@ compat_test!(
- 	TaskLease,
- 	TASK_LEASE_BASIC,
- 	fixtures::task_lease_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // IDs
-@@ -948,28 +959,28 @@ compat_test!(
- 	NamespaceId,
- 	NAMESPACE_ID_BASIC,
- 	fixtures::namespace_id_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	database_id_basic,
- 	DatabaseId,
- 	DATABASE_ID_BASIC,
- 	fixtures::database_id_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_id_basic,
- 	TableId,
- 	TABLE_ID_BASIC,
- 	fixtures::table_id_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	index_id_basic,
- 	IndexId,
- 	INDEX_ID_BASIC,
- 	fixtures::index_id_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // ModuleDefinition
-@@ -978,21 +989,21 @@ compat_test!(
- 	ModuleDefinition,
- 	MODULE_SURREALISM,
- 	fixtures::module_surrealism(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	module_definition_silo,
- 	ModuleDefinition,
- 	MODULE_SILO,
- 	fixtures::module_silo(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	module_no_name,
- 	ModuleDefinition,
- 	MODULE_NO_NAME,
- 	fixtures::module_no_name(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // NodeLiveQuery
-@@ -1001,7 +1012,7 @@ compat_test!(
- 	NodeLiveQuery,
- 	NODE_LIVE_QUERY_BASIC,
- 	fixtures::node_live_query_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // TableMutations
-@@ -1010,35 +1021,35 @@ compat_test!(
- 	TableMutations,
- 	TABLE_MUTATIONS_SET,
- 	fixtures::table_mutations_set(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_mutations_del,
- 	TableMutations,
- 	TABLE_MUTATIONS_DEL,
- 	fixtures::table_mutations_del(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_mutations_def,
- 	TableMutations,
- 	TABLE_MUTATIONS_DEF,
- 	fixtures::table_mutations_def(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_mutations_set_with_diff,
- 	TableMutations,
- 	TABLE_MUTATIONS_SET_WITH_DIFF,
- 	fixtures::table_mutations_set_with_diff(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	table_mutations_del_with_original,
- 	TableMutations,
- 	TABLE_MUTATIONS_DEL_WITH_ORIGINAL,
- 	fixtures::table_mutations_del_with_original(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // Node
-@@ -1047,14 +1058,14 @@ compat_test!(
- 	Node,
- 	NODE_ACTIVE,
- 	fixtures::node_active(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	node_archived,
- 	Node,
- 	NODE_ARCHIVED,
- 	fixtures::node_archived(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // RecordId
-@@ -1063,21 +1074,21 @@ compat_test!(
- 	RecordId,
- 	RECORDID_NUMBER,
- 	fixtures::recordid_number(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_string,
- 	RecordId,
- 	RECORDID_STRING,
- 	fixtures::recordid_string(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_uuid,
- 	RecordId,
- 	RECORDID_UUID,
- 	fixtures::recordid_uuid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // RecordIdKey
-@@ -1086,42 +1097,42 @@ compat_test!(
- 	RecordIdKey,
- 	RECORDID_KEY_NUMBER,
- 	fixtures::recordid_key_number(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_key_string,
- 	RecordIdKey,
- 	RECORDID_KEY_STRING,
- 	fixtures::recordid_key_string(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_key_uuid,
- 	RecordIdKey,
- 	RECORDID_KEY_UUID,
- 	fixtures::recordid_key_uuid(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_key_array,
- 	RecordIdKey,
- 	RECORDID_KEY_ARRAY,
- 	fixtures::recordid_key_array(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_key_object,
- 	RecordIdKey,
- 	RECORDID_KEY_OBJECT,
- 	fixtures::recordid_key_object(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- compat_test!(
- 	recordid_key_range,
- 	RecordIdKey,
- 	RECORDID_KEY_RANGE,
- 	fixtures::recordid_key_range(),
--	[v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
- 
- // TermDocument
-@@ -1130,5 +1141,5 @@ compat_test!(
- 	TermDocument,
- 	TERM_DOCUMENT_BASIC,
- 	fixtures::term_document_basic(),
--	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2]
-+	[v3_0_0_beta_1, v3_0_0_beta_3, v3_0_0, v3_1_0, v3_1_1, v3_2_2, v3_2_4_customware]
- );
-diff --git a/surrealdb/core/src/catalog/compat/v3_2_4_customware.rs b/surrealdb/core/src/catalog/compat/v3_2_4_customware.rs
-new file mode 100644
-index 000000000..577e760dd
---- /dev/null
-+++ b/surrealdb/core/src/catalog/compat/v3_2_4_customware.rs
-@@ -0,0 +1,1229 @@
-+//! v3_2_4_customware.rs - Generated file, DO NOT EDIT
-+//!
-+//! Catalog compatibility fixtures for this fork at upstream v3.2.4
-+//! (customware entries 001-003 applied).
-+//!
-+//! Captured because customware/001 moved `TableDefinition.id_generation`
-+//! to `#[revision(start = 4)]` and bumped the struct to revision 4:
-+//! upstream took revision 3 for `cache_lives_ts` in the 3.2 line, so the
-+//! fork's write format advanced past upstream's. Per the protocol in
-+//! `tests.rs::version_writes_current_format`, a new snapshot is captured
-+//! and the current-format tag moved here; `v3_2_2` keeps its
-+//! decode-and-equals assertion and loses only the byte-exact re-encode one.
-+//!
-+//! They must NEVER be modified after being committed. If deserialization
-+//! of any fixture fails, it indicates a backwards compatibility regression.
-+
-+// ======================================================================
-+// AccessDefinition
-+// ======================================================================
-+
-+/// AccessDefinition: bearer access with JWT
-+pub const ACCESS_BEARER: &[u8] = &[
-+    0x01, 0x0a, 0x61, 0x70, 0x69, 0x5f, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73,
-+    0x01, 0x02, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0x01, 0x01,
-+    0x00, 0x0a, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x5f, 0x6b, 0x65, 0x79,
-+    0x01, 0x01, 0x01, 0x06, 0x0a, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x5f,
-+    0x6b, 0x65, 0x79, 0x01, 0x00, 0x00, 0x01, 0xfb, 0x10, 0x0e, 0x00, 0x01,
-+    0xfb, 0x84, 0x03, 0x00, 0x01, 0xfc, 0x80, 0x51, 0x01, 0x00, 0x00, 0x01,
-+    0x0a, 0x41, 0x50, 0x49, 0x20, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73
-+];
-+/// AccessDefinition: access with custom authenticate expression
-+pub const ACCESS_WITH_AUTHENTICATE: &[u8] = &[
-+    0x01, 0x0b, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x5f, 0x61, 0x75, 0x74,
-+    0x68, 0x01, 0x02, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01,
-+    0x01, 0x04, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x00, 0x01, 0x02,
-+    0x01, 0x28, 0x27, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x2a, 0x20,
-+    0x46, 0x52, 0x4f, 0x4d, 0x20, 0x75, 0x73, 0x65, 0x72, 0x20, 0x57, 0x48,
-+    0x45, 0x52, 0x45, 0x20, 0x69, 0x64, 0x20, 0x3d, 0x20, 0x24, 0x61, 0x75,
-+    0x74, 0x68, 0x2e, 0x69, 0x64, 0x27, 0x00, 0x01, 0xfb, 0x10, 0x0e, 0x00,
-+    0x00, 0x00
-+];
-+/// AccessDefinition: record-based access with signup/signin
-+pub const ACCESS_RECORD: &[u8] = &[
-+    0x01, 0x0b, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x61, 0x63, 0x63, 0x65, 0x73,
-+    0x73, 0x01, 0x00, 0x01, 0x01, 0x48, 0x27, 0x43, 0x52, 0x45, 0x41, 0x54,
-+    0x45, 0x20, 0x75, 0x73, 0x65, 0x72, 0x20, 0x53, 0x45, 0x54, 0x20, 0x65,
-+    0x6d, 0x61, 0x69, 0x6c, 0x20, 0x3d, 0x20, 0x24, 0x65, 0x6d, 0x61, 0x69,
-+    0x6c, 0x2c, 0x20, 0x70, 0x61, 0x73, 0x73, 0x20, 0x3d, 0x20, 0x63, 0x72,
-+    0x79, 0x70, 0x74, 0x6f, 0x3a, 0x3a, 0x61, 0x72, 0x67, 0x6f, 0x6e, 0x32,
-+    0x3a, 0x3a, 0x67, 0x65, 0x6e, 0x65, 0x72, 0x61, 0x74, 0x65, 0x28, 0x24,
-+    0x70, 0x61, 0x73, 0x73, 0x29, 0x27, 0x01, 0x52, 0x27, 0x53, 0x45, 0x4c,
-+    0x45, 0x43, 0x54, 0x20, 0x2a, 0x20, 0x46, 0x52, 0x4f, 0x4d, 0x20, 0x75,
-+    0x73, 0x65, 0x72, 0x20, 0x57, 0x48, 0x45, 0x52, 0x45, 0x20, 0x65, 0x6d,
-+    0x61, 0x69, 0x6c, 0x20, 0x3d, 0x20, 0x24, 0x65, 0x6d, 0x61, 0x69, 0x6c,
-+    0x20, 0x41, 0x4e, 0x44, 0x20, 0x63, 0x72, 0x79, 0x70, 0x74, 0x6f, 0x3a,
-+    0x3a, 0x61, 0x72, 0x67, 0x6f, 0x6e, 0x32, 0x3a, 0x3a, 0x63, 0x6f, 0x6d,
-+    0x70, 0x61, 0x72, 0x65, 0x28, 0x70, 0x61, 0x73, 0x73, 0x2c, 0x20, 0x24,
-+    0x70, 0x61, 0x73, 0x73, 0x29, 0x27, 0x01, 0x01, 0x00, 0x01, 0x01, 0x04,
-+    0x0a, 0x6a, 0x77, 0x74, 0x5f, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x01,
-+    0x01, 0x01, 0x04, 0x0a, 0x6a, 0x77, 0x74, 0x5f, 0x73, 0x65, 0x63, 0x72,
-+    0x65, 0x74, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x01, 0x00, 0x01,
-+    0x01, 0x04, 0x0e, 0x72, 0x65, 0x66, 0x72, 0x65, 0x73, 0x68, 0x5f, 0x73,
-+    0x65, 0x63, 0x72, 0x65, 0x74, 0x00, 0x01, 0x02, 0x01, 0x28, 0x27, 0x53,
-+    0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x2a, 0x20, 0x46, 0x52, 0x4f, 0x4d,
-+    0x20, 0x75, 0x73, 0x65, 0x72, 0x20, 0x57, 0x48, 0x45, 0x52, 0x45, 0x20,
-+    0x69, 0x64, 0x20, 0x3d, 0x20, 0x24, 0x61, 0x75, 0x74, 0x68, 0x2e, 0x69,
-+    0x64, 0x27, 0x01, 0xfc, 0x80, 0x3a, 0x09, 0x00, 0x00, 0x01, 0xfb, 0x84,
-+    0x03, 0x00, 0x01, 0xfc, 0x80, 0x51, 0x01, 0x00, 0x00, 0x01, 0x12, 0x55,
-+    0x73, 0x65, 0x72, 0x20, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x20, 0x61,
-+    0x63, 0x63, 0x65, 0x73, 0x73
-+];
-+/// AccessDefinition: JWT access with JWKS verification
-+pub const ACCESS_JWT_JWKS: &[u8] = &[
-+    0x01, 0x0c, 0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c, 0x5f, 0x6a,
-+    0x77, 0x74, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x2e, 0x68, 0x74, 0x74,
-+    0x70, 0x73, 0x3a, 0x2f, 0x2f, 0x61, 0x75, 0x74, 0x68, 0x2e, 0x65, 0x78,
-+    0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x2e, 0x77,
-+    0x65, 0x6c, 0x6c, 0x2d, 0x6b, 0x6e, 0x6f, 0x77, 0x6e, 0x2f, 0x6a, 0x77,
-+    0x6b, 0x73, 0x2e, 0x6a, 0x73, 0x6f, 0x6e, 0x00, 0x01, 0x01, 0x00, 0x00,
-+    0x00, 0x01, 0xfb, 0x10, 0x0e, 0x00, 0x01, 0x22, 0x45, 0x78, 0x74, 0x65,
-+    0x72, 0x6e, 0x61, 0x6c, 0x20, 0x4a, 0x57, 0x54, 0x20, 0x76, 0x65, 0x72,
-+    0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x20, 0x76, 0x69,
-+    0x61, 0x20, 0x4a, 0x57, 0x4b, 0x53
-+];
-+/// AccessDefinition: bearer access with refresh type
-+pub const ACCESS_BEARER_REFRESH: &[u8] = &[
-+    0x01, 0x0e, 0x72, 0x65, 0x66, 0x72, 0x65, 0x73, 0x68, 0x5f, 0x61, 0x63,
-+    0x63, 0x65, 0x73, 0x73, 0x01, 0x02, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01,
-+    0x01, 0x00, 0x01, 0x01, 0x0a, 0x0e, 0x72, 0x73, 0x61, 0x5f, 0x70, 0x75,
-+    0x62, 0x6c, 0x69, 0x63, 0x5f, 0x6b, 0x65, 0x79, 0x01, 0x01, 0x01, 0x0a,
-+    0x0f, 0x72, 0x73, 0x61, 0x5f, 0x70, 0x72, 0x69, 0x76, 0x61, 0x74, 0x65,
-+    0x5f, 0x6b, 0x65, 0x79, 0x01, 0x00, 0x00, 0x01, 0xfc, 0x00, 0x8d, 0x27,
-+    0x00, 0x00, 0x01, 0xfb, 0x2c, 0x01, 0x00, 0x00, 0x00
-+];
-+
-+// ======================================================================
-+// AccessGrant
-+// ======================================================================
-+
-+/// AccessGrant: JWT access grant
-+pub const GRANT_JWT: &[u8] = &[
-+    0x01, 0x09, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x5f, 0x30, 0x30, 0x31, 0x0a,
-+    0x61, 0x70, 0x69, 0x5f, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x01, 0xfd,
-+    0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x01, 0xfd,
-+    0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01,
-+    0x05, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x01, 0x24, 0x65, 0x79, 0x4a, 0x68, 0x62, 0x47, 0x63, 0x69, 0x4f,
-+    0x69, 0x4a, 0x49, 0x55, 0x7a, 0x49, 0x31, 0x4e, 0x69, 0x49, 0x73, 0x49,
-+    0x6e, 0x52, 0x35, 0x63, 0x43, 0x49, 0x36, 0x49, 0x6b, 0x70, 0x58, 0x56,
-+    0x43, 0x4a, 0x39
-+];
-+/// AccessGrant: revoked access grant
-+pub const GRANT_REVOKED: &[u8] = &[
-+    0x01, 0x09, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x5f, 0x30, 0x30, 0x32, 0x0a,
-+    0x61, 0x70, 0x69, 0x5f, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x01, 0xfd,
-+    0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x01, 0xfd,
-+    0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x01, 0xfd,
-+    0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x01, 0x04,
-+    0x75, 0x73, 0x65, 0x72, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// AccessGrant: record-type access grant with record subject
-+pub const GRANT_RECORD: &[u8] = &[
-+    0x01, 0x09, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x5f, 0x30, 0x30, 0x33, 0x0b,
-+    0x75, 0x73, 0x65, 0x72, 0x5f, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x01,
-+    0xfd, 0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x01,
-+    0xfd, 0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x01,
-+    0x00, 0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0x54, 0x01,
-+    0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x21,
-+    0x65, 0x79, 0x4a, 0x68, 0x62, 0x47, 0x63, 0x69, 0x4f, 0x69, 0x4a, 0x49,
-+    0x55, 0x7a, 0x49, 0x31, 0x4e, 0x69, 0x4a, 0x39, 0x2e, 0x72, 0x65, 0x63,
-+    0x6f, 0x72, 0x64, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e
-+];
-+/// AccessGrant: bearer-type access grant
-+pub const GRANT_BEARER: &[u8] = &[
-+    0x01, 0x09, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x5f, 0x30, 0x30, 0x34, 0x0e,
-+    0x72, 0x65, 0x66, 0x72, 0x65, 0x73, 0x68, 0x5f, 0x61, 0x63, 0x63, 0x65,
-+    0x73, 0x73, 0x01, 0xfd, 0xff, 0x23, 0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x01, 0x01, 0x0f, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63,
-+    0x65, 0x5f, 0x61, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x01, 0x02, 0x01,
-+    0x16, 0x73, 0x75, 0x72, 0x72, 0x65, 0x61, 0x6c, 0x2d, 0x62, 0x65, 0x61,
-+    0x72, 0x65, 0x72, 0x2d, 0x6b, 0x65, 0x79, 0x2d, 0x30, 0x30, 0x31, 0x1f,
-+    0x73, 0x75, 0x72, 0x72, 0x65, 0x61, 0x6c, 0x2d, 0x62, 0x65, 0x61, 0x72,
-+    0x65, 0x72, 0x2d, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78,
-+    0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78
-+];
-+
-+// ======================================================================
-+// AnalyzerDefinition
-+// ======================================================================
-+
-+/// AnalyzerDefinition: minimal analyzer
-+pub const ANALYZER_BASIC: &[u8] = &[
-+    0x01, 0x06, 0x73, 0x69, 0x6d, 0x70, 0x6c, 0x65, 0x00, 0x00, 0x00, 0x00
-+];
-+/// AnalyzerDefinition: analyzer with tokenizers and filters
-+pub const ANALYZER_WITH_TOKENIZERS: &[u8] = &[
-+    0x01, 0x07, 0x65, 0x6e, 0x67, 0x6c, 0x69, 0x73, 0x68, 0x01, 0x13, 0x66,
-+    0x6e, 0x3a, 0x3a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x5f, 0x61, 0x6e,
-+    0x61, 0x6c, 0x79, 0x7a, 0x65, 0x72, 0x01, 0x02, 0x01, 0x01, 0x01, 0x02,
-+    0x01, 0x02, 0x01, 0x00, 0x01, 0x02, 0x01, 0x15, 0x45, 0x6e, 0x67, 0x6c,
-+    0x69, 0x73, 0x68, 0x20, 0x74, 0x65, 0x78, 0x74, 0x20, 0x61, 0x6e, 0x61,
-+    0x6c, 0x79, 0x7a, 0x65, 0x72
-+];
-+
-+// ======================================================================
-+// ApiActionDefinition
-+// ======================================================================
-+
-+/// ApiActionDefinition: minimal API action definition
-+pub const API_ACTION_BASIC: &[u8] = &[
-+    0x01, 0x01, 0x01, 0x01, 0x15, 0x27, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54,
-+    0x20, 0x2a, 0x20, 0x46, 0x52, 0x4f, 0x4d, 0x20, 0x75, 0x73, 0x65, 0x72,
-+    0x73, 0x27, 0x01, 0x00, 0x01, 0x01
-+];
-+/// ApiActionDefinition: API action with multiple methods
-+pub const API_ACTION_MULTI_METHOD: &[u8] = &[
-+    0x01, 0x03, 0x01, 0x01, 0x01, 0x03, 0x01, 0x04, 0x1c, 0x27, 0x43, 0x52,
-+    0x45, 0x41, 0x54, 0x45, 0x20, 0x75, 0x73, 0x65, 0x72, 0x73, 0x20, 0x43,
-+    0x4f, 0x4e, 0x54, 0x45, 0x4e, 0x54, 0x20, 0x24, 0x62, 0x6f, 0x64, 0x79,
-+    0x27, 0x01, 0x00, 0x01, 0x01
-+];
-+
-+// ======================================================================
-+// ApiDefinition
-+// ======================================================================
-+
-+/// ApiDefinition: minimal API endpoint
-+pub const API_BASIC: &[u8] = &[
-+    0x02, 0x0d, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x76, 0x31, 0x2f, 0x75, 0x73,
-+    0x65, 0x72, 0x73, 0x01, 0x01, 0x01, 0x01, 0x01, 0x15, 0x27, 0x53, 0x45,
-+    0x4c, 0x45, 0x43, 0x54, 0x20, 0x2a, 0x20, 0x46, 0x52, 0x4f, 0x4d, 0x20,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x27, 0x01, 0x00, 0x01, 0x01, 0x00, 0x01,
-+    0x00, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e,
-+    0x65, 0x72
-+];
-+/// ApiDefinition: API with middleware and multiple methods
-+pub const API_WITH_MIDDLEWARE: &[u8] = &[
-+    0x02, 0x0e, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x76, 0x31, 0x2f, 0x6f, 0x72,
-+    0x64, 0x65, 0x72, 0x73, 0x02, 0x01, 0x02, 0x01, 0x01, 0x01, 0x03, 0x16,
-+    0x27, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x2a, 0x20, 0x46, 0x52,
-+    0x4f, 0x4d, 0x20, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73, 0x27, 0x01, 0x00,
-+    0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x14, 0x27, 0x44, 0x45, 0x4c, 0x45,
-+    0x54, 0x45, 0x20, 0x46, 0x52, 0x4f, 0x4d, 0x20, 0x6f, 0x72, 0x64, 0x65,
-+    0x72, 0x73, 0x27, 0x01, 0x00, 0x01, 0x01, 0x01, 0x0c, 0x27, 0x52, 0x45,
-+    0x54, 0x55, 0x52, 0x4e, 0x20, 0x34, 0x30, 0x34, 0x27, 0x01, 0x02, 0x01,
-+    0x04, 0x61, 0x75, 0x74, 0x68, 0x00, 0x01, 0x0a, 0x72, 0x61, 0x74, 0x65,
-+    0x5f, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x01, 0x02, 0x43, 0x03, 0x00, 0x00,
-+    0x00, 0x01, 0x00, 0xc8, 0x01, 0x01, 0x01, 0x14, 0x4f, 0x72, 0x64, 0x65,
-+    0x72, 0x20, 0x6d, 0x61, 0x6e, 0x61, 0x67, 0x65, 0x6d, 0x65, 0x6e, 0x74,
-+    0x20, 0x41, 0x50, 0x49, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e,
-+    0x65, 0x72
-+];
-+/// ApiDefinition: API with specific permissions and database-level auth limit
-+pub const API_WITH_AUTH_LIMIT: &[u8] = &[
-+    0x02, 0x0d, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x76, 0x31, 0x2f, 0x61, 0x64,
-+    0x6d, 0x69, 0x6e, 0x02, 0x01, 0x03, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02,
-+    0x1a, 0x27, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x2a, 0x20, 0x46,
-+    0x52, 0x4f, 0x4d, 0x20, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x5f, 0x64, 0x61,
-+    0x74, 0x61, 0x27, 0x01, 0x00, 0x01, 0x02, 0x16, 0x22, 0x24, 0x61, 0x75,
-+    0x74, 0x68, 0x2e, 0x72, 0x6f, 0x6c, 0x65, 0x20, 0x3d, 0x20, 0x27, 0x61,
-+    0x64, 0x6d, 0x69, 0x6e, 0x27, 0x22, 0x01, 0x02, 0x01, 0x00, 0x01, 0x05,
-+    0x19, 0x22, 0x52, 0x45, 0x54, 0x55, 0x52, 0x4e, 0x20, 0x7b, 0x20, 0x73,
-+    0x74, 0x61, 0x74, 0x75, 0x73, 0x3a, 0x20, 0x27, 0x6f, 0x6b, 0x27, 0x20,
-+    0x7d, 0x22, 0x01, 0x00, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01,
-+    0x20, 0x41, 0x64, 0x6d, 0x69, 0x6e, 0x20, 0x41, 0x50, 0x49, 0x20, 0x77,
-+    0x69, 0x74, 0x68, 0x20, 0x72, 0x65, 0x73, 0x74, 0x72, 0x69, 0x63, 0x74,
-+    0x65, 0x64, 0x20, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x01, 0x01, 0x03,
-+    0x07, 0x70, 0x72, 0x6f, 0x64, 0x5f, 0x6e, 0x73, 0x07, 0x70, 0x72, 0x6f,
-+    0x64, 0x5f, 0x64, 0x62, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72
-+];
-+
-+// ======================================================================
-+// Appending
-+// ======================================================================
-+
-+/// Appending: appending with None values
-+pub const APPENDING_NONE: &[u8] = &[
-+    0x02, 0x00, 0x00, 0x01, 0x00, 0xf6, 0x00
-+];
-+/// Appending: appending with old values
-+pub const APPENDING_OLD_VALUES: &[u8] = &[
-+    0x02, 0x01, 0x01, 0x02, 0x44, 0x0a, 0x00, 0x00, 0x00, 0x09, 0x6f, 0x6c,
-+    0x64, 0x20, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x00, 0x01, 0x00, 0xf6, 0x00
-+];
-+/// Appending: appending with new values
-+pub const APPENDING_NEW_VALUES: &[u8] = &[
-+    0x02, 0x00, 0x01, 0x01, 0x02, 0x44, 0x0a, 0x00, 0x00, 0x00, 0x09, 0x6e,
-+    0x65, 0x77, 0x20, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x01, 0x00, 0xf6, 0x00
-+];
-+/// Appending: appending with both old and new values
-+pub const APPENDING_BOTH: &[u8] = &[
-+    0x02, 0x01, 0x01, 0x02, 0x44, 0x0a, 0x00, 0x00, 0x00, 0x09, 0x6f, 0x6c,
-+    0x64, 0x20, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x01, 0x01, 0x02, 0x44, 0x0a,
-+    0x00, 0x00, 0x00, 0x09, 0x6e, 0x65, 0x77, 0x20, 0x76, 0x61, 0x6c, 0x75,
-+    0x65, 0x01, 0x00, 0xf6, 0x00
-+];
-+
-+// ======================================================================
-+// BatchValue
-+// ======================================================================
-+
-+/// BatchValue: batch value with number value
-+pub const BATCH_VALUE_BASIC: &[u8] = &[
-+    0x01, 0xf6, 0x12, 0x3e, 0x45, 0x67, 0xe8, 0x9b, 0x12, 0xd3, 0xa4, 0x56,
-+    0x42, 0x66, 0x14, 0x17, 0x40, 0x00
-+];
-+
-+// ======================================================================
-+// BucketDefinition
-+// ======================================================================
-+
-+/// BucketDefinition: minimal bucket
-+pub const BUCKET_BASIC: &[u8] = &[
-+    0x01, 0x00, 0x07, 0x75, 0x70, 0x6c, 0x6f, 0x61, 0x64, 0x73, 0x00, 0x01,
-+    0x01, 0x00, 0x00
-+];
-+/// BucketDefinition: readonly bucket with backend
-+pub const BUCKET_READONLY: &[u8] = &[
-+    0x01, 0x01, 0x01, 0x7b, 0x08, 0x61, 0x72, 0x63, 0x68, 0x69, 0x76, 0x65,
-+    0x73, 0x01, 0x14, 0x73, 0x33, 0x3a, 0x2f, 0x2f, 0x62, 0x75, 0x63, 0x6b,
-+    0x65, 0x74, 0x2f, 0x61, 0x72, 0x63, 0x68, 0x69, 0x76, 0x65, 0x73, 0x01,
-+    0x00, 0x01, 0x01, 0x19, 0x52, 0x65, 0x61, 0x64, 0x2d, 0x6f, 0x6e, 0x6c,
-+    0x79, 0x20, 0x61, 0x72, 0x63, 0x68, 0x69, 0x76, 0x65, 0x20, 0x73, 0x74,
-+    0x6f, 0x72, 0x61, 0x67, 0x65
-+];
-+
-+// ======================================================================
-+// ConfigDefinition
-+// ======================================================================
-+
-+/// ConfigDefinition: GraphQL configuration (default)
-+pub const CONFIG_GRAPHQL: &[u8] = &[
-+    0x01, 0x01, 0x03, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00
-+];
-+/// ConfigDefinition: default config with namespace and database
-+pub const CONFIG_DEFAULT: &[u8] = &[
-+    0x01, 0x00, 0x01, 0x01, 0x0a, 0x70, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x74,
-+    0x69, 0x6f, 0x6e, 0x01, 0x04, 0x6d, 0x61, 0x69, 0x6e
-+];
-+/// ConfigDefinition: API config definition
-+pub const CONFIG_API: &[u8] = &[
-+    0x01, 0x02, 0x01, 0x01, 0x01, 0x04, 0x63, 0x6f, 0x72, 0x73, 0x01, 0x02,
-+    0x44, 0x02, 0x00, 0x00, 0x00, 0x01, 0x2a, 0x01, 0x02, 0x16, 0x22, 0x24,
-+    0x61, 0x75, 0x74, 0x68, 0x2e, 0x72, 0x6f, 0x6c, 0x65, 0x20, 0x3d, 0x20,
-+    0x27, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x27, 0x22
-+];
-+/// ConfigDefinition: GraphQL config with all non-default fields
-+pub const CONFIG_GRAPHQL_FULL: &[u8] = &[
-+    0x01, 0x01, 0x03, 0x01, 0x02, 0x02, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73,
-+    0x05, 0x70, 0x6f, 0x73, 0x74, 0x73, 0x01, 0x01, 0x01, 0x0a, 0x01, 0xfb,
-+    0xe8, 0x03, 0x01, 0x01
-+];
-+
-+// ======================================================================
-+// DatabaseDefinition
-+// ======================================================================
-+
-+/// DatabaseDefinition: minimal database without changefeed
-+pub const DATABASE_BASIC: &[u8] = &[
-+    0x01, 0x01, 0x01, 0x04, 0x74, 0x65, 0x73, 0x74, 0x00, 0x00, 0x00
-+];
-+/// DatabaseDefinition: database with changefeed enabled
-+pub const DATABASE_WITH_CHANGEFEED: &[u8] = &[
-+    0x01, 0x7b, 0xfb, 0xc8, 0x01, 0x06, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x73,
-+    0x01, 0x0b, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x20, 0x73, 0x74, 0x6f, 0x72,
-+    0x65, 0x01, 0x01, 0xfb, 0x10, 0x0e, 0x00, 0x01, 0x00
-+];
-+/// DatabaseDefinition: database with strict mode enabled
-+pub const DATABASE_STRICT: &[u8] = &[
-+    0x01, 0x01, 0x02, 0x09, 0x73, 0x74, 0x72, 0x69, 0x63, 0x74, 0x5f, 0x64,
-+    0x62, 0x01, 0x14, 0x53, 0x74, 0x72, 0x69, 0x63, 0x74, 0x20, 0x6d, 0x6f,
-+    0x64, 0x65, 0x20, 0x64, 0x61, 0x74, 0x61, 0x62, 0x61, 0x73, 0x65, 0x00,
-+    0x01
-+];
-+
-+// ======================================================================
-+// DocLengthAndCount
-+// ======================================================================
-+
-+/// DocLengthAndCount: document length and count
-+pub const DOC_LENGTH_AND_COUNT_BASIC: &[u8] = &[
-+    0x01, 0xf6, 0xfb, 0x90, 0x03
-+];
-+
-+// ======================================================================
-+// EventDefinition
-+// ======================================================================
-+
-+/// EventDefinition: table event trigger
-+pub const EVENT_BASIC: &[u8] = &[
-+    0x03, 0x09, 0x6f, 0x6e, 0x5f, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x13, 0x22, 0x24, 0x65, 0x76, 0x65, 0x6e,
-+    0x74, 0x20, 0x3d, 0x20, 0x27, 0x43, 0x52, 0x45, 0x41, 0x54, 0x45, 0x27,
-+    0x22, 0x01, 0x24, 0x22, 0x43, 0x52, 0x45, 0x41, 0x54, 0x45, 0x20, 0x61,
-+    0x75, 0x64, 0x69, 0x74, 0x20, 0x53, 0x45, 0x54, 0x20, 0x61, 0x63, 0x74,
-+    0x69, 0x6f, 0x6e, 0x20, 0x3d, 0x20, 0x27, 0x63, 0x72, 0x65, 0x61, 0x74,
-+    0x65, 0x27, 0x22, 0x01, 0x13, 0x41, 0x75, 0x64, 0x69, 0x74, 0x20, 0x6c,
-+    0x6f, 0x67, 0x20, 0x6f, 0x6e, 0x20, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65,
-+    0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x01, 0x00
-+];
-+/// EventDefinition: async event with retry and max_depth
-+pub const EVENT_ASYNC: &[u8] = &[
-+    0x03, 0x0f, 0x6f, 0x6e, 0x5f, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x5f,
-+    0x61, 0x73, 0x79, 0x6e, 0x63, 0x06, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73,
-+    0x13, 0x22, 0x24, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x20, 0x3d, 0x20, 0x27,
-+    0x55, 0x50, 0x44, 0x41, 0x54, 0x45, 0x27, 0x22, 0x01, 0x3d, 0x22, 0x43,
-+    0x52, 0x45, 0x41, 0x54, 0x45, 0x20, 0x6e, 0x6f, 0x74, 0x69, 0x66, 0x69,
-+    0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x20, 0x53, 0x45, 0x54, 0x20, 0x6f,
-+    0x72, 0x64, 0x65, 0x72, 0x20, 0x3d, 0x20, 0x24, 0x61, 0x66, 0x74, 0x65,
-+    0x72, 0x2e, 0x69, 0x64, 0x2c, 0x20, 0x74, 0x79, 0x70, 0x65, 0x20, 0x3d,
-+    0x20, 0x27, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x27, 0x22, 0x01,
-+    0x22, 0x41, 0x73, 0x79, 0x6e, 0x63, 0x20, 0x6e, 0x6f, 0x74, 0x69, 0x66,
-+    0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x20, 0x6f, 0x6e, 0x20, 0x6f,
-+    0x72, 0x64, 0x65, 0x72, 0x20, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x01,
-+    0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x01, 0x01, 0x03,
-+    0x05
-+];
-+
-+// ======================================================================
-+// FieldDefinition
-+// ======================================================================
-+
-+/// FieldDefinition: minimal field
-+pub const FIELD_BASIC: &[u8] = &[
-+    0x04, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01,
-+    0x01, 0x01, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e,
-+    0x65, 0x72, 0x00, 0x00, 0x00
-+];
-+/// FieldDefinition: field with type constraint and default
-+pub const FIELD_WITH_TYPE: &[u8] = &[
-+    0x04, 0x05, 0x65, 0x6d, 0x61, 0x69, 0x6c, 0x05, 0x75, 0x73, 0x65, 0x72,
-+    0x73, 0x01, 0x01, 0x0c, 0x00, 0x00, 0x01, 0x1b, 0x27, 0x73, 0x74, 0x72,
-+    0x69, 0x6e, 0x67, 0x3a, 0x3a, 0x6c, 0x6f, 0x77, 0x65, 0x72, 0x63, 0x61,
-+    0x73, 0x65, 0x28, 0x24, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x29, 0x27, 0x01,
-+    0x1b, 0x27, 0x73, 0x74, 0x72, 0x69, 0x6e, 0x67, 0x3a, 0x3a, 0x69, 0x73,
-+    0x3a, 0x3a, 0x65, 0x6d, 0x61, 0x69, 0x6c, 0x28, 0x24, 0x76, 0x61, 0x6c,
-+    0x75, 0x65, 0x29, 0x27, 0x00, 0x01, 0x01, 0x02, 0x27, 0x27, 0x01, 0x01,
-+    0x01, 0x01, 0x01, 0x01, 0x01, 0x12, 0x55, 0x73, 0x65, 0x72, 0x20, 0x65,
-+    0x6d, 0x61, 0x69, 0x6c, 0x20, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73,
-+    0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x00,
-+    0x00, 0x00
-+];
-+/// FieldDefinition: readonly computed field
-+pub const FIELD_READONLY: &[u8] = &[
-+    0x04, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74,
-+    0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x05, 0x00, 0x01, 0x00,
-+    0x00, 0x01, 0x0d, 0x27, 0x74, 0x69, 0x6d, 0x65, 0x3a, 0x3a, 0x6e, 0x6f,
-+    0x77, 0x28, 0x29, 0x27, 0x01, 0x00, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00,
-+    0x01, 0x19, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x20, 0x63, 0x72, 0x65,
-+    0x61, 0x74, 0x69, 0x6f, 0x6e, 0x20, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74,
-+    0x61, 0x6d, 0x70, 0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e,
-+    0x65, 0x72, 0x00, 0x00, 0x00
-+];
-+/// FieldDefinition: flexible field with reference and computed deps
-+pub const FIELD_FLEXIBLE_WITH_REFERENCE: &[u8] = &[
-+    0x04, 0x0b, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x5f, 0x70, 0x72, 0x69, 0x63,
-+    0x65, 0x06, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73, 0x01, 0x01, 0x0a, 0x01,
-+    0x00, 0x01, 0x14, 0x27, 0x24, 0x70, 0x72, 0x69, 0x63, 0x65, 0x20, 0x2a,
-+    0x20, 0x24, 0x71, 0x75, 0x61, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x27, 0x00,
-+    0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x16, 0x22, 0x24,
-+    0x61, 0x75, 0x74, 0x68, 0x2e, 0x72, 0x6f, 0x6c, 0x65, 0x20, 0x3d, 0x20,
-+    0x27, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x27, 0x22, 0x01, 0x16, 0x43, 0x61,
-+    0x6c, 0x63, 0x75, 0x6c, 0x61, 0x74, 0x65, 0x64, 0x20, 0x74, 0x6f, 0x74,
-+    0x61, 0x6c, 0x20, 0x70, 0x72, 0x69, 0x63, 0x65, 0x01, 0x01, 0x01, 0x02,
-+    0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x01, 0x01,
-+    0x02, 0x05, 0x70, 0x72, 0x69, 0x63, 0x65, 0x08, 0x71, 0x75, 0x61, 0x6e,
-+    0x74, 0x69, 0x74, 0x79, 0x01, 0x00, 0x00
-+];
-+/// FieldDefinition: field with DefineDefault::Set and incomplete computed deps
-+pub const FIELD_WITH_DEFAULT_SET: &[u8] = &[
-+    0x04, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x06, 0x6f, 0x72, 0x64,
-+    0x65, 0x72, 0x73, 0x01, 0x01, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x2f, 0x22,
-+    0x24, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x20, 0x49, 0x4e, 0x53, 0x49, 0x44,
-+    0x45, 0x20, 0x5b, 0x27, 0x70, 0x65, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x27,
-+    0x2c, 0x20, 0x27, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x27, 0x2c, 0x20,
-+    0x27, 0x63, 0x6c, 0x6f, 0x73, 0x65, 0x64, 0x27, 0x5d, 0x22, 0x00, 0x01,
-+    0x02, 0x0b, 0x22, 0x27, 0x70, 0x65, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x27,
-+    0x22, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x18, 0x22, 0x24, 0x61, 0x75,
-+    0x74, 0x68, 0x2e, 0x72, 0x6f, 0x6c, 0x65, 0x20, 0x3d, 0x20, 0x27, 0x6d,
-+    0x61, 0x6e, 0x61, 0x67, 0x65, 0x72, 0x27, 0x22, 0x00, 0x01, 0x01, 0x01,
-+    0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x01,
-+    0x01, 0x00, 0x00, 0x00, 0x00
-+];
-+/// FieldDefinition: field with record type kind and custom reference delete
-+pub const FIELD_RECORD_TYPE: &[u8] = &[
-+    0x04, 0x06, 0x61, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x05, 0x70, 0x6f, 0x73,
-+    0x74, 0x73, 0x01, 0x01, 0x10, 0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73,
-+    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01,
-+    0x00, 0x01, 0x10, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x20, 0x72, 0x65,
-+    0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x01, 0x01, 0x01, 0x04, 0x10,
-+    0x27, 0x44, 0x45, 0x4c, 0x45, 0x54, 0x45, 0x20, 0x24, 0x70, 0x61, 0x72,
-+    0x65, 0x6e, 0x74, 0x27, 0x01, 0x01, 0x03, 0x07, 0x74, 0x65, 0x73, 0x74,
-+    0x5f, 0x6e, 0x73, 0x07, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x64, 0x62, 0x01,
-+    0x06, 0x45, 0x64, 0x69, 0x74, 0x6f, 0x72, 0x00, 0x00, 0x00
-+];
-+
-+// ======================================================================
-+// FunctionDefinition
-+// ======================================================================
-+
-+/// FunctionDefinition: simple function
-+pub const FUNCTION_BASIC: &[u8] = &[
-+    0x03, 0x05, 0x67, 0x72, 0x65, 0x65, 0x74, 0x00, 0x1c, 0x7b, 0x20, 0x22,
-+    0x52, 0x45, 0x54, 0x55, 0x52, 0x4e, 0x20, 0x27, 0x48, 0x65, 0x6c, 0x6c,
-+    0x6f, 0x2c, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x27, 0x22, 0x20,
-+    0x7d, 0x00, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77,
-+    0x6e, 0x65, 0x72, 0x00, 0x00
-+];
-+/// FunctionDefinition: function with arguments and return type
-+pub const FUNCTION_WITH_ARGS: &[u8] = &[
-+    0x03, 0x0b, 0x61, 0x64, 0x64, 0x5f, 0x6e, 0x75, 0x6d, 0x62, 0x65, 0x72,
-+    0x73, 0x02, 0x01, 0x61, 0x01, 0x0a, 0x01, 0x62, 0x01, 0x0a, 0x14, 0x7b,
-+    0x20, 0x27, 0x52, 0x45, 0x54, 0x55, 0x52, 0x4e, 0x20, 0x24, 0x61, 0x20,
-+    0x2b, 0x20, 0x24, 0x62, 0x27, 0x20, 0x7d, 0x01, 0x0f, 0x41, 0x64, 0x64,
-+    0x20, 0x74, 0x77, 0x6f, 0x20, 0x6e, 0x75, 0x6d, 0x62, 0x65, 0x72, 0x73,
-+    0x01, 0x01, 0x01, 0x01, 0x0a, 0x01, 0x01, 0x01, 0x01, 0x05, 0x4f, 0x77,
-+    0x6e, 0x65, 0x72, 0x00, 0x00
-+];
-+
-+// ======================================================================
-+// ID Types
-+// ======================================================================
-+
-+/// ID Types: IndexId fixture
-+pub const INDEX_ID_BASIC: &[u8] = &[
-+    0x2a
-+];
-+/// ID Types: DatabaseId fixture
-+pub const DATABASE_ID_BASIC: &[u8] = &[
-+    0x7b
-+];
-+/// ID Types: NamespaceId fixture
-+pub const NAMESPACE_ID_BASIC: &[u8] = &[
-+    0xfb, 0xc8, 0x01
-+];
-+/// ID Types: TableId fixture
-+pub const TABLE_ID_BASIC: &[u8] = &[
-+    0xfb, 0x15, 0x03
-+];
-+
-+// ======================================================================
-+// IndexDefinition
-+// ======================================================================
-+
-+/// IndexDefinition: basic index
-+pub const INDEX_BASIC: &[u8] = &[
-+    0x01, 0x01, 0x08, 0x69, 0x64, 0x78, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x02,
-+    0x00, 0x00, 0x00
-+];
-+/// IndexDefinition: unique index on multiple columns
-+pub const INDEX_UNIQUE: &[u8] = &[
-+    0x01, 0x02, 0x10, 0x69, 0x64, 0x78, 0x5f, 0x65, 0x6d, 0x61, 0x69, 0x6c,
-+    0x5f, 0x75, 0x6e, 0x69, 0x71, 0x75, 0x65, 0x05, 0x75, 0x73, 0x65, 0x72,
-+    0x73, 0x01, 0x05, 0x65, 0x6d, 0x61, 0x69, 0x6c, 0x02, 0x01, 0x01, 0x17,
-+    0x55, 0x6e, 0x69, 0x71, 0x75, 0x65, 0x20, 0x65, 0x6d, 0x61, 0x69, 0x6c,
-+    0x20, 0x63, 0x6f, 0x6e, 0x73, 0x74, 0x72, 0x61, 0x69, 0x6e, 0x74, 0x00
-+];
-+/// IndexDefinition: HNSW vector index
-+pub const INDEX_HNSW: &[u8] = &[
-+    0x01, 0x03, 0x12, 0x69, 0x64, 0x78, 0x5f, 0x65, 0x6d, 0x62, 0x65, 0x64,
-+    0x64, 0x69, 0x6e, 0x67, 0x5f, 0x68, 0x6e, 0x73, 0x77, 0x09, 0x64, 0x6f,
-+    0x63, 0x75, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x01, 0x09, 0x65, 0x6d, 0x62,
-+    0x65, 0x64, 0x64, 0x69, 0x6e, 0x67, 0x02, 0x02, 0x02, 0xfb, 0x00, 0x06,
-+    0x02, 0x01, 0x02, 0x01, 0x0c, 0x18, 0x01, 0x01, 0x8f, 0xc8, 0x70, 0x19,
-+    0x68, 0xc1, 0xd9, 0x3f, 0x96, 0x00, 0x01, 0x00, 0x01, 0x1e, 0x56, 0x65,
-+    0x63, 0x74, 0x6f, 0x72, 0x20, 0x73, 0x69, 0x6d, 0x69, 0x6c, 0x61, 0x72,
-+    0x69, 0x74, 0x79, 0x20, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68, 0x20, 0x69,
-+    0x6e, 0x64, 0x65, 0x78, 0x00
-+];
-+/// IndexDefinition: full-text search index with BM25 scoring
-+pub const INDEX_FULLTEXT: &[u8] = &[
-+    0x01, 0x04, 0x12, 0x69, 0x64, 0x78, 0x5f, 0x63, 0x6f, 0x6e, 0x74, 0x65,
-+    0x6e, 0x74, 0x5f, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68, 0x08, 0x61, 0x72,
-+    0x74, 0x69, 0x63, 0x6c, 0x65, 0x73, 0x02, 0x05, 0x74, 0x69, 0x74, 0x6c,
-+    0x65, 0x04, 0x62, 0x6f, 0x64, 0x79, 0x02, 0x03, 0x01, 0x07, 0x65, 0x6e,
-+    0x67, 0x6c, 0x69, 0x73, 0x68, 0x01, 0x01, 0x00, 0x9a, 0x99, 0x99, 0x3f,
-+    0x00, 0x00, 0x40, 0x3f, 0x01, 0x1c, 0x46, 0x75, 0x6c, 0x6c, 0x2d, 0x74,
-+    0x65, 0x78, 0x74, 0x20, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68, 0x20, 0x6f,
-+    0x6e, 0x20, 0x61, 0x72, 0x74, 0x69, 0x63, 0x6c, 0x65, 0x73, 0x00
-+];
-+/// IndexDefinition: count index with prepare_remove flag
-+pub const INDEX_COUNT: &[u8] = &[
-+    0x01, 0x05, 0x10, 0x69, 0x64, 0x78, 0x5f, 0x73, 0x74, 0x61, 0x74, 0x75,
-+    0x73, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x06, 0x6f, 0x72, 0x64, 0x65,
-+    0x72, 0x73, 0x01, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x02, 0x04,
-+    0x01, 0x01, 0x13, 0x22, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x20, 0x3d,
-+    0x20, 0x27, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x27, 0x22, 0x00, 0x01
-+];
-+
-+// ======================================================================
-+// MlModelDefinition
-+// ======================================================================
-+
-+/// MlModelDefinition: ML model definition
-+pub const MODEL_BASIC: &[u8] = &[
-+    0x01, 0x13, 0x73, 0x68, 0x61, 0x32, 0x35, 0x36, 0x3a, 0x61, 0x62, 0x63,
-+    0x31, 0x32, 0x33, 0x64, 0x65, 0x66, 0x34, 0x35, 0x36, 0x09, 0x73, 0x65,
-+    0x6e, 0x74, 0x69, 0x6d, 0x65, 0x6e, 0x74, 0x05, 0x31, 0x2e, 0x30, 0x2e,
-+    0x30, 0x01, 0x18, 0x53, 0x65, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x6e, 0x74,
-+    0x20, 0x61, 0x6e, 0x61, 0x6c, 0x79, 0x73, 0x69, 0x73, 0x20, 0x6d, 0x6f,
-+    0x64, 0x65, 0x6c, 0x01, 0x01
-+];
-+
-+// ======================================================================
-+// ModuleDefinition
-+// ======================================================================
-+
-+/// ModuleDefinition: module with Surrealism executable
-+pub const MODULE_SURREALISM: &[u8] = &[
-+    0x01, 0x01, 0x09, 0x6d, 0x79, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65,
-+    0x01, 0x0d, 0x43, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x20, 0x6d, 0x6f, 0x64,
-+    0x75, 0x6c, 0x65, 0x01, 0x01, 0x01, 0x00, 0x01, 0x09, 0x6d, 0x79, 0x5f,
-+    0x62, 0x75, 0x63, 0x6b, 0x65, 0x74, 0x0a, 0x6d, 0x6f, 0x64, 0x75, 0x6c,
-+    0x65, 0x5f, 0x6b, 0x65, 0x79
-+];
-+/// ModuleDefinition: module with Silo executable
-+pub const MODULE_SILO: &[u8] = &[
-+    0x01, 0x01, 0x0b, 0x73, 0x69, 0x6c, 0x6f, 0x5f, 0x6d, 0x6f, 0x64, 0x75,
-+    0x6c, 0x65, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x03, 0x6f, 0x72, 0x67,
-+    0x03, 0x70, 0x6b, 0x67, 0x01, 0x02, 0x03
-+];
-+/// ModuleDefinition: module with no name and Permission::None
-+pub const MODULE_NO_NAME: &[u8] = &[
-+    0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x0e, 0x64, 0x65, 0x66,
-+    0x61, 0x75, 0x6c, 0x74, 0x5f, 0x62, 0x75, 0x63, 0x6b, 0x65, 0x74, 0x10,
-+    0x61, 0x6e, 0x6f, 0x6e, 0x79, 0x6d, 0x6f, 0x75, 0x73, 0x5f, 0x6d, 0x6f,
-+    0x64, 0x75, 0x6c, 0x65
-+];
-+
-+// ======================================================================
-+// NamespaceDefinition
-+// ======================================================================
-+
-+/// NamespaceDefinition: minimal namespace without comment
-+pub const NAMESPACE_BASIC: &[u8] = &[
-+    0x01, 0x01, 0x04, 0x74, 0x65, 0x73, 0x74, 0x00
-+];
-+/// NamespaceDefinition: namespace with optional comment
-+pub const NAMESPACE_WITH_COMMENT: &[u8] = &[
-+    0x01, 0x7b, 0x0a, 0x70, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x74, 0x69, 0x6f,
-+    0x6e, 0x01, 0x14, 0x50, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x74, 0x69, 0x6f,
-+    0x6e, 0x20, 0x6e, 0x61, 0x6d, 0x65, 0x73, 0x70, 0x61, 0x63, 0x65
-+];
-+
-+// ======================================================================
-+// Node
-+// ======================================================================
-+
-+/// Node: active node
-+pub const NODE_ACTIVE: &[u8] = &[
-+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xfc, 0xd2, 0x02, 0x96, 0x49, 0x00,
-+    0x00
-+];
-+/// Node: archived node
-+pub const NODE_ARCHIVED: &[u8] = &[
-+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xfd, 0xea, 0x16, 0xb0, 0x4c, 0x02,
-+    0x00, 0x00, 0x00, 0x01, 0x00
-+];
-+
-+// ======================================================================
-+// NodeLiveQuery
-+// ======================================================================
-+
-+/// NodeLiveQuery: minimal node live query
-+pub const NODE_LIVE_QUERY_BASIC: &[u8] = &[
-+    0x01, 0x01, 0x02, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73
-+];
-+
-+// ======================================================================
-+// ParamDefinition
-+// ======================================================================
-+
-+/// ParamDefinition: boolean parameter
-+pub const PARAM_BOOL: &[u8] = &[
-+    0x01, 0x05, 0x64, 0x65, 0x62, 0x75, 0x67, 0x02, 0x22, 0x01, 0x01, 0x0f,
-+    0x44, 0x65, 0x62, 0x75, 0x67, 0x20, 0x6d, 0x6f, 0x64, 0x65, 0x20, 0x66,
-+    0x6c, 0x61, 0x67, 0x01, 0x01
-+];
-+/// ParamDefinition: string parameter
-+pub const PARAM_STRING: &[u8] = &[
-+    0x01, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x02, 0x44,
-+    0x06, 0x00, 0x00, 0x00, 0x05, 0x4d, 0x79, 0x41, 0x70, 0x70, 0x00, 0x01,
-+    0x01
-+];
-+
-+// ======================================================================
-+// PrimaryAppending
-+// ======================================================================
-+
-+/// PrimaryAppending: primary appending with number value
-+pub const PRIMARY_APPENDING_BASIC: &[u8] = &[
-+    0x02, 0x7b, 0x00
-+];
-+
-+// ======================================================================
-+// Record
-+// ======================================================================
-+
-+/// Record: record with None value
-+pub const RECORD_NONE: &[u8] = &[
-+    0x02, 0x0b, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x00
-+];
-+/// Record: record with Null value
-+pub const RECORD_NULL: &[u8] = &[
-+    0x02, 0x0b, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x01
-+];
-+/// Record: record with boolean data
-+pub const RECORD_BOOL: &[u8] = &[
-+    0x02, 0x0c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x22, 0x01
-+];
-+/// Record: record with int number data
-+pub const RECORD_NUMBER_INT: &[u8] = &[
-+    0x02, 0x12, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x43, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x54
-+];
-+/// Record: record with float number data
-+pub const RECORD_NUMBER_FLOAT: &[u8] = &[
-+    0x02, 0x19, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x43, 0x0a, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x45, 0x40
-+];
-+/// Record: record with decimal number data
-+pub const RECORD_NUMBER_DECIMAL: &[u8] = &[
-+    0x02, 0x21, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x43, 0x12, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-+    0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00
-+];
-+/// Record: record with string data
-+pub const RECORD_STRING: &[u8] = &[
-+    0x02, 0x19, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x44, 0x0a, 0x00, 0x00, 0x00, 0x09, 0x74, 0x65, 0x73,
-+    0x74, 0x20, 0x64, 0x61, 0x74, 0x61
-+];
-+/// Record: record with bytes data
-+pub const RECORD_BYTES: &[u8] = &[
-+    0x02, 0x15, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4c, 0x06, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x02,
-+    0x03, 0x04
-+];
-+/// Record: record with duration data
-+pub const RECORD_DURATION: &[u8] = &[
-+    0x02, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x45, 0x05, 0x00, 0x00, 0x00, 0x01, 0xfb, 0x10, 0x0e,
-+    0x00
-+];
-+/// Record: record with datetime data
-+pub const RECORD_DATETIME: &[u8] = &[
-+    0x02, 0x1a, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x46, 0x0b, 0x00, 0x00, 0x00, 0x01, 0xfd, 0xff, 0x23,
-+    0xe4, 0x19, 0x29, 0x0f, 0x00, 0x00, 0x00
-+];
-+/// Record: record with UUID data
-+pub const RECORD_UUID: &[u8] = &[
-+    0x02, 0x20, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x47, 0x11, 0x00, 0x00, 0x00, 0x01, 0x12, 0x3e, 0x45,
-+    0x67, 0xe8, 0x9b, 0x12, 0xd3, 0xa4, 0x56, 0x42, 0x66, 0x14, 0x17, 0x40,
-+    0x00
-+];
-+/// Record: record with geometry data (point)
-+pub const RECORD_GEOMETRY_POINT: &[u8] = &[
-+    0x02, 0x21, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x12, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x40
-+];
-+/// Record: record with geometry data (line)
-+pub const RECORD_GEOMETRY_LINE: &[u8] = &[
-+    0x02, 0x32, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x23, 0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40
-+];
-+/// Record: record with geometry data (polygon)
-+pub const RECORD_GEOMETRY_POLYGON: &[u8] = &[
-+    0x02, 0x94, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x85, 0x00, 0x00, 0x00, 0x01, 0x02, 0x04, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x14, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x40, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c,
-+    0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x22, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24,
-+    0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x40, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x28, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c,
-+    0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40
-+];
-+/// Record: record with geometry data (multi point)
-+pub const RECORD_GEOMETRY_MULTI_POINT: &[u8] = &[
-+    0x02, 0x32, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x23, 0x00, 0x00, 0x00, 0x01, 0x03, 0x02, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40
-+];
-+/// Record: record with geometry data (multi line)
-+pub const RECORD_GEOMETRY_MULTI_LINE: &[u8] = &[
-+    0x02, 0x54, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x45, 0x00, 0x00, 0x00, 0x01, 0x04, 0x02, 0x02,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40, 0x02, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x14, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18,
-+    0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x40, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x20, 0x40
-+];
-+/// Record: record with geometry data (multi polygon)
-+pub const RECORD_GEOMETRY_MULTI_POLYGON: &[u8] = &[
-+    0x02, 0x96, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x87, 0x00, 0x00, 0x00, 0x01, 0x05, 0x02, 0x04,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x14, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x40,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x40, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x1c, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x22, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x24, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x40, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x28, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x1c, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00
-+];
-+/// Record: record with geometry data (collection)
-+pub const RECORD_GEOMETRY_COLLECTION: &[u8] = &[
-+    0x02, 0x8b, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4b, 0x7c, 0x00, 0x00, 0x00, 0x01, 0x06, 0x03, 0x01,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x40, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x18, 0x40, 0x01, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x1c, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x24, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x40, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x1c, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00
-+];
-+/// Record: record with table data
-+pub const RECORD_TABLE: &[u8] = &[
-+    0x02, 0x15, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4d, 0x06, 0x00, 0x00, 0x00, 0x05, 0x75, 0x73, 0x65,
-+    0x72, 0x73
-+];
-+/// Record: record with record ID data
-+pub const RECORD_RECORDID: &[u8] = &[
-+    0x02, 0x19, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4e, 0x0a, 0x00, 0x00, 0x00, 0x01, 0x05, 0x75, 0x73,
-+    0x65, 0x72, 0x73, 0x01, 0x00, 0xf6
-+];
-+/// Record: record with file data
-+pub const RECORD_FILE: &[u8] = &[
-+    0x02, 0x1c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4f, 0x0d, 0x00, 0x00, 0x00, 0x01, 0x06, 0x62, 0x75,
-+    0x63, 0x6b, 0x65, 0x74, 0x04, 0x2f, 0x6b, 0x65, 0x79
-+];
-+/// Record: record with range data
-+pub const RECORD_RANGE_UNBOUNDED: &[u8] = &[
-+    0x02, 0x12, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x51, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00
-+];
-+/// Record: record with range data
-+pub const RECORD_RANGE_BOUNDED: &[u8] = &[
-+    0x02, 0x26, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x51, 0x17, 0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x43,
-+    0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0xf6, 0x02, 0x02, 0x43, 0x05, 0x00,
-+    0x00, 0x00, 0x01, 0x00, 0xfb, 0x90, 0x03
-+];
-+/// Record: record with regex data
-+pub const RECORD_REGEX: &[u8] = &[
-+    0x02, 0x18, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x50, 0x09, 0x00, 0x00, 0x00, 0x01, 0x07, 0x5e, 0x74,
-+    0x65, 0x73, 0x74, 0x2e, 0x2a
-+];
-+/// Record: record with array data
-+pub const RECORD_ARRAY: &[u8] = &[
-+    0x02, 0x2e, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x48, 0x1f, 0x00, 0x00, 0x00, 0x02, 0x1a, 0x00, 0x00,
-+    0x00, 0x00, 0x03, 0x02, 0x44, 0x06, 0x00, 0x00, 0x00, 0x05, 0x69, 0x74,
-+    0x65, 0x6d, 0x31, 0x02, 0x43, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0xf6,
-+    0x02, 0x22, 0x01
-+];
-+/// Record: record with object data
-+pub const RECORD_OBJECT: &[u8] = &[
-+    0x02, 0x5e, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x4a, 0x4f, 0x00, 0x00, 0x00, 0x02, 0x4a, 0x00, 0x00,
-+    0x00, 0x00, 0x04, 0x02, 0x69, 0x64, 0x02, 0x4e, 0x17, 0x00, 0x00, 0x00,
-+    0x01, 0x0b, 0x63, 0x6f, 0x6d, 0x70, 0x61, 0x74, 0x5f, 0x74, 0x65, 0x73,
-+    0x74, 0x01, 0x01, 0x07, 0x66, 0x69, 0x78, 0x74, 0x75, 0x72, 0x65, 0x03,
-+    0x61, 0x67, 0x65, 0x02, 0x43, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x3c,
-+    0x04, 0x6e, 0x61, 0x6d, 0x65, 0x02, 0x44, 0x06, 0x00, 0x00, 0x00, 0x05,
-+    0x41, 0x6c, 0x69, 0x63, 0x65, 0x06, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65,
-+    0x02, 0x22, 0x01
-+];
-+/// Record: record with set data
-+pub const RECORD_SET: &[u8] = &[
-+    0x02, 0x37, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
-+    0x00, 0x00, 0x02, 0x49, 0x28, 0x00, 0x00, 0x00, 0x02, 0x23, 0x00, 0x00,
-+    0x00, 0x00, 0x03, 0x02, 0x44, 0x05, 0x00, 0x00, 0x00, 0x04, 0x74, 0x61,
-+    0x67, 0x31, 0x02, 0x44, 0x05, 0x00, 0x00, 0x00, 0x04, 0x74, 0x61, 0x67,
-+    0x32, 0x02, 0x44, 0x05, 0x00, 0x00, 0x00, 0x04, 0x74, 0x61, 0x67, 0x33
-+];
-+/// Record: record with metadata (Edge type)
-+pub const RECORD_WITH_METADATA: &[u8] = &[
-+    0x02, 0x3b, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00,
-+    0x00, 0x01, 0x01, 0x02, 0x01, 0x01, 0x00, 0x02, 0x4a, 0x27, 0x00, 0x00,
-+    0x00, 0x02, 0x22, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x69, 0x64, 0x02,
-+    0x4e, 0x17, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x63, 0x6f, 0x6d, 0x70, 0x61,
-+    0x74, 0x5f, 0x74, 0x65, 0x73, 0x74, 0x01, 0x01, 0x07, 0x66, 0x69, 0x78,
-+    0x74, 0x75, 0x72, 0x65
-+];
-+/// Record: record with explicit Table metadata type
-+pub const RECORD_WITH_TABLE_METADATA: &[u8] = &[
-+    0x02, 0x51, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00,
-+    0x00, 0x01, 0x01, 0x02, 0x00, 0x00, 0x02, 0x4a, 0x3e, 0x00, 0x00, 0x00,
-+    0x02, 0x39, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02, 0x69, 0x64, 0x02, 0x4e,
-+    0x17, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x63, 0x6f, 0x6d, 0x70, 0x61, 0x74,
-+    0x5f, 0x74, 0x65, 0x73, 0x74, 0x01, 0x01, 0x07, 0x66, 0x69, 0x78, 0x74,
-+    0x75, 0x72, 0x65, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x02, 0x44, 0x0c, 0x00,
-+    0x00, 0x00, 0x0b, 0x54, 0x65, 0x73, 0x74, 0x20, 0x52, 0x65, 0x63, 0x6f,
-+    0x72, 0x64
-+];
-+
-+// ======================================================================
-+// RecordId
-+// ======================================================================
-+
-+/// RecordId: RecordId with number key
-+pub const RECORDID_NUMBER: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0xf6
-+];
-+/// RecordId: RecordId with string key
-+pub const RECORDID_STRING: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x06, 0x61, 0x62,
-+    0x63, 0x31, 0x32, 0x33
-+];
-+/// RecordId: RecordId with UUID key
-+pub const RECORDID_UUID: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x02, 0x01, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00
-+];
-+
-+// ======================================================================
-+// RecordIdKey
-+// ======================================================================
-+
-+/// RecordIdKey: RecordIdKey with number
-+pub const RECORDID_KEY_NUMBER: &[u8] = &[
-+    0x01, 0x00, 0x54
-+];
-+/// RecordIdKey: RecordIdKey with string
-+pub const RECORDID_KEY_STRING: &[u8] = &[
-+    0x01, 0x01, 0x08, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x6b, 0x65, 0x79
-+];
-+/// RecordIdKey: RecordIdKey with UUID
-+pub const RECORDID_KEY_UUID: &[u8] = &[
-+    0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// RecordIdKey: RecordIdKey with array
-+pub const RECORDID_KEY_ARRAY: &[u8] = &[
-+    0x01, 0x03, 0x02, 0x13, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02, 0x43, 0x03,
-+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x44, 0x02, 0x00, 0x00, 0x00,
-+    0x01, 0x61
-+];
-+/// RecordIdKey: RecordIdKey with object
-+pub const RECORDID_KEY_OBJECT: &[u8] = &[
-+    0x01, 0x04, 0x02, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x69, 0x64,
-+    0x02, 0x43, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0xf6
-+];
-+/// RecordIdKey: RecordIdKey with range
-+pub const RECORDID_KEY_RANGE: &[u8] = &[
-+    0x01, 0x05, 0x01, 0x01, 0x01, 0x00, 0x02, 0x02, 0x01, 0x00, 0xc8
-+];
-+
-+// ======================================================================
-+// SequenceDefinition
-+// ======================================================================
-+
-+/// SequenceDefinition: minimal sequence
-+pub const SEQUENCE_BASIC: &[u8] = &[
-+    0x01, 0x08, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x01, 0x02,
-+    0x00
-+];
-+/// SequenceDefinition: sequence with custom options
-+pub const SEQUENCE_WITH_OPTIONS: &[u8] = &[
-+    0x01, 0x0e, 0x69, 0x6e, 0x76, 0x6f, 0x69, 0x63, 0x65, 0x5f, 0x6e, 0x75,
-+    0x6d, 0x62, 0x65, 0x72, 0x64, 0xfb, 0xd0, 0x07, 0x01, 0x1e, 0x00
-+];
-+
-+// ======================================================================
-+// SequenceState
-+// ======================================================================
-+
-+/// SequenceState: sequence state with number value
-+pub const SEQUENCE_STATE_BASIC: &[u8] = &[
-+    0x01, 0xf6
-+];
-+
-+// ======================================================================
-+// SubscriptionDefinition
-+// ======================================================================
-+
-+/// SubscriptionDefinition: minimal subscription with diff fields
-+pub const SUBSCRIPTION_BASIC: &[u8] = &[
-+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x07,
-+    0x27, 0x75, 0x73, 0x65, 0x72, 0x73, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// SubscriptionDefinition: subscription with condition and fetch
-+pub const SUBSCRIPTION_WITH_FILTERS: &[u8] = &[
-+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01,
-+    0x01, 0x02, 0x01, 0x00, 0x01, 0x01, 0x01, 0x06, 0x27, 0x6e, 0x61, 0x6d,
-+    0x65, 0x27, 0x00, 0x07, 0x27, 0x75, 0x73, 0x65, 0x72, 0x73, 0x27, 0x01,
-+    0x0f, 0x27, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x20, 0x3d, 0x20, 0x74,
-+    0x72, 0x75, 0x65, 0x27, 0x01, 0x01, 0x01, 0x01, 0x09, 0x27, 0x70, 0x72,
-+    0x6f, 0x66, 0x69, 0x6c, 0x65, 0x27, 0x01, 0x01, 0x01, 0x01, 0x00, 0x05,
-+    0x14, 0x01, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00
-+];
-+/// SubscriptionDefinition: subscription with non-empty vars
-+pub const SUBSCRIPTION_WITH_VARS: &[u8] = &[
-+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08,
-+    0x27, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73, 0x27, 0x01, 0x15, 0x27, 0x61,
-+    0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x20, 0x3e, 0x20, 0x24, 0x74, 0x68, 0x72,
-+    0x65, 0x73, 0x68, 0x6f, 0x6c, 0x64, 0x27, 0x00, 0x01, 0x01, 0x01, 0x01,
-+    0x00, 0x05, 0x14, 0x01, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x09, 0x74,
-+    0x68, 0x72, 0x65, 0x73, 0x68, 0x6f, 0x6c, 0x64, 0x02, 0x43, 0x03, 0x00,
-+    0x00, 0x00, 0x01, 0x00, 0x64, 0x07, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x69,
-+    0x64, 0x02, 0x44, 0x09, 0x00, 0x00, 0x00, 0x08, 0x75, 0x73, 0x65, 0x72,
-+    0x3a, 0x31, 0x32, 0x33
-+];
-+
-+// ======================================================================
-+// TableDefinition
-+// ======================================================================
-+
-+/// TableDefinition: minimal table definition
-+pub const TABLE_BASIC: &[u8] = &[
-+    0x04, 0x01, 0x01, 0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x00, 0x00,
-+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00,
-+    0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00
-+];
-+/// TableDefinition: table with view definition
-+pub const TABLE_WITH_VIEW: &[u8] = &[
-+    0x04, 0x7b, 0xfb, 0xc8, 0x01, 0xfb, 0x15, 0x03, 0x0a, 0x75, 0x73, 0x65,
-+    0x72, 0x5f, 0x73, 0x74, 0x61, 0x74, 0x73, 0x00, 0x00, 0x01, 0x01, 0x02,
-+    0x01, 0x01, 0x02, 0x01, 0x00, 0x01, 0x01, 0x01, 0x07, 0x27, 0x63, 0x6f,
-+    0x75, 0x6e, 0x74, 0x27, 0x01, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x01,
-+    0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x0f, 0x27, 0x61, 0x63, 0x74,
-+    0x69, 0x76, 0x65, 0x20, 0x3d, 0x20, 0x74, 0x72, 0x75, 0x65, 0x27, 0x01,
-+    0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00,
-+    0x01, 0x14, 0x55, 0x73, 0x65, 0x72, 0x20, 0x73, 0x74, 0x61, 0x74, 0x69,
-+    0x73, 0x74, 0x69, 0x63, 0x73, 0x20, 0x76, 0x69, 0x65, 0x77, 0x01, 0x01,
-+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// TableDefinition: schemafull table with changefeed
-+pub const TABLE_SCHEMAFULL: &[u8] = &[
-+    0x04, 0x01, 0x01, 0x02, 0x06, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73, 0x00,
-+    0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-+    0x01, 0xfc, 0x80, 0x51, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0d, 0x4f, 0x72,
-+    0x64, 0x65, 0x72, 0x20, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x73, 0x01,
-+    0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00
-+];
-+/// TableDefinition: relation table with drop and non-default permissions
-+pub const TABLE_RELATION: &[u8] = &[
-+    0x04, 0x0a, 0x14, 0x1e, 0x05, 0x6c, 0x69, 0x6b, 0x65, 0x73, 0x01, 0x01,
-+    0x00, 0x01, 0x01, 0x01, 0x01, 0x02, 0x16, 0x22, 0x24, 0x61, 0x75, 0x74,
-+    0x68, 0x2e, 0x72, 0x6f, 0x6c, 0x65, 0x20, 0x3d, 0x20, 0x27, 0x61, 0x64,
-+    0x6d, 0x69, 0x6e, 0x27, 0x22, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x13,
-+    0x55, 0x73, 0x65, 0x72, 0x20, 0x6c, 0x69, 0x6b, 0x65, 0x73, 0x20, 0x72,
-+    0x65, 0x6c, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x01, 0x02, 0x02, 0x01, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x02, 0x05, 0x70, 0x6f, 0x73, 0x74, 0x73,
-+    0x08, 0x63, 0x6f, 0x6d, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x01, 0x01, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// TableDefinition: table with materialized view
-+pub const TABLE_WITH_MATERIALIZED_VIEW: &[u8] = &[
-+    0x04, 0x01, 0x01, 0x64, 0x0c, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x5f,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x00, 0x00, 0x01, 0x01, 0x00, 0x01, 0x01,
-+    0x01, 0x01, 0x00, 0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x0f,
-+    0x27, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x20, 0x3d, 0x20, 0x74, 0x72,
-+    0x75, 0x65, 0x27, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-+    0x00, 0x01, 0x21, 0x4d, 0x61, 0x74, 0x65, 0x72, 0x69, 0x61, 0x6c, 0x69,
-+    0x7a, 0x65, 0x64, 0x20, 0x76, 0x69, 0x65, 0x77, 0x20, 0x6f, 0x66, 0x20,
-+    0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x20, 0x75, 0x73, 0x65, 0x72, 0x73,
-+    0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00
-+];
-+/// TableDefinition: table with TableType::Any
-+pub const TABLE_ANY_TYPE: &[u8] = &[
-+    0x04, 0x01, 0x01, 0x32, 0x08, 0x66, 0x6c, 0x65, 0x78, 0x69, 0x62, 0x6c,
-+    0x65, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-+    0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+
-+// ======================================================================
-+// TableMutations
-+// ======================================================================
-+
-+/// TableMutations: table mutations with set operation
-+pub const TABLE_MUTATIONS_SET: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x00, 0x01, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0x02, 0x02, 0x4a, 0x18, 0x00,
-+    0x00, 0x00, 0x02, 0x13, 0x00, 0x00, 0x00, 0x00, 0x01, 0x04, 0x6e, 0x61,
-+    0x6d, 0x65, 0x02, 0x44, 0x06, 0x00, 0x00, 0x00, 0x05, 0x41, 0x6c, 0x69,
-+    0x63, 0x65
-+];
-+/// TableMutations: table mutations with delete operation
-+pub const TABLE_MUTATIONS_DEL: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x01, 0x01, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0x02
-+];
-+/// TableMutations: table mutations with Def operation
-+pub const TABLE_MUTATIONS_DEF: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x02, 0x04, 0x01,
-+    0x01, 0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x00, 0x00, 0x00, 0x01,
-+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x01,
-+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-+];
-+/// TableMutations: table mutations with SetWithDiff operation
-+pub const TABLE_MUTATIONS_SET_WITH_DIFF: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x03, 0x01, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0x02, 0x02, 0x4a, 0x23, 0x00,
-+    0x00, 0x00, 0x02, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0x61, 0x67,
-+    0x65, 0x02, 0x43, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x3c, 0x04, 0x6e,
-+    0x61, 0x6d, 0x65, 0x02, 0x44, 0x04, 0x00, 0x00, 0x00, 0x03, 0x42, 0x6f,
-+    0x62, 0x01, 0x01, 0x02, 0x01, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x02, 0x44,
-+    0x06, 0x00, 0x00, 0x00, 0x05, 0x41, 0x6c, 0x69, 0x63, 0x65
-+];
-+/// TableMutations: table mutations with DelWithOriginal operation
-+pub const TABLE_MUTATIONS_DEL_WITH_ORIGINAL: &[u8] = &[
-+    0x01, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x01, 0x04, 0x01, 0x05,
-+    0x75, 0x73, 0x65, 0x72, 0x73, 0x01, 0x00, 0x04, 0x02, 0x4a, 0x1a, 0x00,
-+    0x00, 0x00, 0x02, 0x15, 0x00, 0x00, 0x00, 0x00, 0x01, 0x04, 0x6e, 0x61,
-+    0x6d, 0x65, 0x02, 0x44, 0x08, 0x00, 0x00, 0x00, 0x07, 0x43, 0x68, 0x61,
-+    0x72, 0x6c, 0x69, 0x65
-+];
-+
-+// ======================================================================
-+// TaskLease
-+// ======================================================================
-+
-+/// TaskLease: task lease with UUID and datetime value
-+pub const TASK_LEASE_BASIC: &[u8] = &[
-+    0x01, 0x12, 0x3e, 0x45, 0x67, 0xe8, 0x9b, 0x12, 0xd3, 0xa4, 0x56, 0x42,
-+    0x66, 0x14, 0x17, 0x40, 0x00, 0xfc, 0x80, 0xc4, 0xc9, 0xd2, 0x00
-+];
-+
-+// ======================================================================
-+// TermDocument
-+// ======================================================================
-+
-+/// TermDocument: term document with offsets
-+pub const TERM_DOCUMENT_BASIC: &[u8] = &[
-+    0x01, 0x7b, 0x01, 0x01, 0x01, 0x02, 0x03, 0x04
-+];
-+
-+// ======================================================================
-+// UserDefinition
-+// ======================================================================
-+
-+/// UserDefinition: minimal user
-+pub const USER_BASIC: &[u8] = &[
-+    0x01, 0x05, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x23, 0x24, 0x61, 0x72, 0x67,
-+    0x6f, 0x6e, 0x32, 0x69, 0x64, 0x24, 0x76, 0x3d, 0x31, 0x39, 0x24, 0x6d,
-+    0x3d, 0x36, 0x35, 0x35, 0x33, 0x36, 0x2c, 0x74, 0x3d, 0x33, 0x2c, 0x70,
-+    0x3d, 0x34, 0x24, 0x68, 0x61, 0x73, 0x68, 0x09, 0x54, 0x4f, 0x54, 0x50,
-+    0x5f, 0x43, 0x4f, 0x44, 0x45, 0x01, 0x05, 0x6f, 0x77, 0x6e, 0x65, 0x72,
-+    0x00, 0x00, 0x00, 0x01, 0x00
-+];
-+/// UserDefinition: user with custom token/session durations
-+pub const USER_WITH_DURATIONS: &[u8] = &[
-+    0x01, 0x08, 0x61, 0x70, 0x69, 0x5f, 0x75, 0x73, 0x65, 0x72, 0x23, 0x24,
-+    0x61, 0x72, 0x67, 0x6f, 0x6e, 0x32, 0x69, 0x64, 0x24, 0x76, 0x3d, 0x31,
-+    0x39, 0x24, 0x6d, 0x3d, 0x36, 0x35, 0x35, 0x33, 0x36, 0x2c, 0x74, 0x3d,
-+    0x33, 0x2c, 0x70, 0x3d, 0x34, 0x24, 0x68, 0x61, 0x73, 0x68, 0x00, 0x02,
-+    0x06, 0x76, 0x69, 0x65, 0x77, 0x65, 0x72, 0x06, 0x65, 0x64, 0x69, 0x74,
-+    0x6f, 0x72, 0x01, 0xfb, 0x10, 0x0e, 0x00, 0x01, 0xfc, 0x80, 0x51, 0x01,
-+    0x00, 0x00, 0x01, 0x13, 0x41, 0x50, 0x49, 0x20, 0x73, 0x65, 0x72, 0x76,
-+    0x69, 0x63, 0x65, 0x20, 0x61, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x01,
-+    0x01
-+];
-+/// UserDefinition: user with database-level base
-+pub const USER_DB_BASE: &[u8] = &[
-+    0x01, 0x07, 0x64, 0x62, 0x5f, 0x75, 0x73, 0x65, 0x72, 0x23, 0x24, 0x61,
-+    0x72, 0x67, 0x6f, 0x6e, 0x32, 0x69, 0x64, 0x24, 0x76, 0x3d, 0x31, 0x39,
-+    0x24, 0x6d, 0x3d, 0x36, 0x35, 0x35, 0x33, 0x36, 0x2c, 0x74, 0x3d, 0x33,
-+    0x2c, 0x70, 0x3d, 0x34, 0x24, 0x68, 0x61, 0x73, 0x68, 0x00, 0x01, 0x06,
-+    0x65, 0x64, 0x69, 0x74, 0x6f, 0x72, 0x01, 0xfb, 0x08, 0x07, 0x00, 0x00,
-+    0x01, 0x13, 0x44, 0x61, 0x74, 0x61, 0x62, 0x61, 0x73, 0x65, 0x2d, 0x6c,
-+    0x65, 0x76, 0x65, 0x6c, 0x20, 0x75, 0x73, 0x65, 0x72, 0x01, 0x02
-+];
-+
-+// ======================================================================
-+// MajorVersion
-+// ======================================================================
-+
-+/// MajorVersion: major version 1
-+pub const VERSION_1: &[u8] = &[
-+    0x00, 0x01
-+];
-+/// MajorVersion: major version 3
-+pub const VERSION_3: &[u8] = &[
-+    0x00, 0x03
-+];
 diff --git a/surrealdb/core/src/catalog/table.rs b/surrealdb/core/src/catalog/table.rs
-index b4d873876..86b255017 100644
+index b4d873876..93e25ddf0 100644
 --- a/surrealdb/core/src/catalog/table.rs
 +++ b/surrealdb/core/src/catalog/table.rs
-@@ -60,7 +60,7 @@ impl revision::WalkRevisioned for TableId {
- 	}
- }
- 
--#[revisioned(revision = 3)]
-+#[revisioned(revision = 4)]
- #[derive(Clone, Debug, Eq, PartialEq, Hash)]
- pub struct TableDefinition {
- 	pub(crate) namespace_id: NamespaceId,
-@@ -74,6 +74,16 @@ pub struct TableDefinition {
- 	pub(crate) changefeed: Option<ChangeFeed>,
- 	pub(crate) comment: Option<String>,
- 	pub(crate) table_type: TableType,
-+	/// How auto-generated record ids are minted on this table (Dorsid fork).
-+	///
-+	/// Fork-local field, so it must claim a revision upstream has not used.
-+	/// Upstream took revision 3 for `cache_lives_ts` in the 3.2 line, so this
-+	/// moved 3 -> 4 during that rebase; bytes written by upstream at revision 3
-+	/// decode with `IdGeneration::default()`. Any future rebase must re-check
-+	/// this against upstream's `revisioned(revision = N)` and bump again if
-+	/// upstream has since consumed 4.
-+	#[revision(start = 4)]
-+	pub(crate) id_generation: IdGeneration,
- 
- 	/// The last time that a DEFINE FIELD was added to this table
- 	pub(crate) cache_fields_ts: Uuid,
-@@ -128,6 +138,7 @@ impl TableDefinition {
- 			changefeed: None,
- 			comment: None,
- 			table_type: TableType::default(),
-+			id_generation: IdGeneration::default(),
- 			cache_fields_ts: now,
- 			cache_events_ts: now,
- 			cache_tables_ts: now,
-@@ -162,6 +173,7 @@ impl TableDefinition {
- 				.map(|v| sql::Expr::Literal(sql::Literal::String(v.into())))
- 				.unwrap_or(sql::Expr::Literal(sql::Literal::None)),
- 			table_type: self.table_type.clone().into(),
-+			id_generation: self.id_generation.into(),
- 			graphql_alias: self.graphql_alias.clone(),
- 			graphql_deprecated: self.graphql_deprecated.clone(),
- 			..Default::default()
-@@ -182,6 +194,7 @@ impl InfoStructure for TableDefinition {
- 			"drop" => self.drop.into(),
- 			"schemafull" => self.schemafull.into(),
- 			"kind" => self.table_type.structure(),
-+			"id_generation" => self.id_generation.structure(),
- 			"view", if let Some(v) = self.view => v.structure(),
- 			"changefeed", if let Some(v) = self.changefeed => v.structure(),
- 			"permissions" => self.permissions.structure(),
-@@ -193,6 +206,31 @@ impl InfoStructure for TableDefinition {
+@@ -193,6 +193,133 @@ impl InfoStructure for TableDefinition {
  	}
  }
  
 +/// How a table's auto-generated record ids are minted when a row is created
 +/// without an explicit `id` field.
 +///
-+/// - `Default`: existing random string ids, preserving upstream behavior.
++/// - `Default`: upstream behaviour — a random string key, or whatever the `id` field's declared
++///   kind implies (see `Document::generate_typed_id`).
 +/// - `Sid`: Dorsid `Sid`, a monotonic i64 with per-table warm-up from stored keys.
 +/// - `Rid`: Dorsid `Rid`, a stateless persistent i64 from CSPRNG entropy.
++///
++/// # Fork-owned revision namespace
++///
++/// This value is **not** a field on [`TableDefinition`]. It is persisted on its
++/// own under the fork-owned `!ig` key (see [`crate::key::table::ig`]), which
++/// means its revision number belongs solely to this fork: upstream can never
++/// collide with it, and bumping it is a local decision with no rebase risk.
++///
++/// It briefly *was* a `TableDefinition` field, and that is exactly what went
++/// wrong — upstream took the same revision number for a different field in the
++/// 3.2 line and the two layouts became indistinguishable. See
++/// `customware/README.md` for the rule that came out of it.
++///
++/// Per-policy configuration should therefore ride the variants (for example a
++/// future `Rid { warmup: u32 }`) and bump this type to revision 2, rather than
++/// being bolted onto an upstream-owned struct.
++///
++/// An absent `!ig` key means [`IdGeneration::Default`]; no key is written for
++/// the default policy.
 +#[revisioned(revision = 1)]
 +#[derive(Debug, Default, Hash, Clone, Copy, Eq, PartialEq)]
 +pub enum IdGeneration {
@@ -2530,6 +435,49 @@ index b4d873876..86b255017 100644
 +	Default,
 +	Sid,
 +	Rid,
++}
++
++impl_kv_value_revisioned!(IdGeneration);
++
++impl IdGeneration {
++	/// The SurrealQL spelling of this policy, for diagnostics.
++	pub(crate) fn as_clause(self) -> &'static str {
++		match self {
++			IdGeneration::Default => "DEFAULT",
++			IdGeneration::Sid => "SID",
++			IdGeneration::Rid => "RID",
++		}
++	}
++
++	/// Whether a key minted by this policy can satisfy a declared `id` kind.
++	///
++	/// `Sid` and `Rid` mint `RecordIdKey::Number(i64)`, which then flows through
++	/// `Document::coerce_id_key` like any other key. If the declared kind cannot
++	/// hold an integer, that coercion fails on *every* insert — so the
++	/// contradiction is rejected when the schema is defined rather than left to
++	/// surface per write.
++	///
++	/// Mirrors `coerce_id_key`: record kinds constrain the outer record rather
++	/// than the key, so they impose no constraint here.
++	pub(crate) fn accepts_id_kind(self, kind: &Kind) -> bool {
++		match self {
++			// The default policy defers to upstream's kind-aware synthesis,
++			// which handles (or rejects) every kind on its own terms.
++			IdGeneration::Default => true,
++			IdGeneration::Sid | IdGeneration::Rid => Self::kind_holds_integer(kind),
++		}
++	}
++
++	fn kind_holds_integer(kind: &Kind) -> bool {
++		match kind {
++			Kind::Any | Kind::Int | Kind::Number => true,
++			// Constrains the record, not the key.
++			k if k.is_record() => true,
++			// A union is satisfiable if any branch is.
++			Kind::Either(kinds) => kinds.iter().any(Self::kind_holds_integer),
++			_ => false,
++		}
++	}
 +}
 +
 +impl InfoStructure for IdGeneration {
@@ -2542,52 +490,48 @@ index b4d873876..86b255017 100644
 +	}
 +}
 +
++/// Fork-local renderers that join a table definition with its sidecar
++/// [`IdGeneration`] policy.
++///
++/// These are kept in their own `impl` block, separate from the upstream one, so
++/// the upstream methods stay textually identical and drop out of the rebase
++/// conflict surface. Callers that have transaction access (INFO, export) fetch
++/// the `!ig` key and use these; everything else keeps rendering upstream's shape.
++///
++/// Both omit the policy entirely when it is [`IdGeneration::Default`], so a
++/// table that does not use Dorsid ids produces output byte-identical to
++/// upstream's.
++impl TableDefinition {
++	/// Like `to_sql_definition`, but carries the table's id-generation policy so
++	/// the rendered DDL includes the `ID SID` / `ID RID` clause.
++	pub(crate) fn to_sql_definition_with_id_generation(
++		&self,
++		id_generation: IdGeneration,
++	) -> DefineTableStatement {
++		DefineTableStatement {
++			id_generation: id_generation.into(),
++			..self.to_sql_definition()
++		}
++	}
++
++	/// Like [`InfoStructure::structure`], but includes an `id_generation` key
++	/// when the policy is not the default.
++	pub(crate) fn structure_with_id_generation(self, id_generation: IdGeneration) -> Value {
++		let structured = self.structure();
++		if id_generation == IdGeneration::Default {
++			return structured;
++		}
++		let Value::Object(mut object) = structured else {
++			return structured;
++		};
++		object.insert("id_generation".to_string(), id_generation.structure());
++		Value::Object(object)
++	}
++}
++
  /// The type of records stored by a table
  #[revisioned(revision = 1)]
  #[derive(Debug, Default, Hash, Clone, Eq, PartialEq)]
-diff --git a/surrealdb/core/src/catalog/test.rs b/surrealdb/core/src/catalog/test.rs
-index b3de0c014..9274b2ea8 100644
---- a/surrealdb/core/src/catalog/test.rs
-+++ b/surrealdb/core/src/catalog/test.rs
-@@ -60,6 +60,7 @@ use crate::val::{Datetime, TableName, Value};
- 	}),
- 	comment: Some("comment".to_string()),
- 	table_type: TableType::Normal,
-+	id_generation: IdGeneration::default(),
- 	cache_fields_ts: Uuid::default(),
- 	cache_events_ts: Uuid::default(),
- 	cache_tables_ts: Uuid::default(),
-@@ -67,7 +68,7 @@ use crate::val::{Datetime, TableName, Value};
- 	cache_lives_ts: Uuid::default(),
- 	graphql_alias: None,
- 	graphql_deprecated: None,
--}, 167)]
-+}, 169)]
- #[case::subscription(SubscriptionDefinition {
- 	id: Uuid::default(),
- 	node: Uuid::default(),
-diff --git a/surrealdb/core/src/cf/mutations.rs b/surrealdb/core/src/cf/mutations.rs
-index c1110003d..43d82a060 100644
---- a/surrealdb/core/src/cf/mutations.rs
-+++ b/surrealdb/core/src/cf/mutations.rs
-@@ -227,7 +227,7 @@ mod tests {
- 		let s = serde_json::to_string(&v).unwrap();
- 		assert_eq!(
- 			s,
--			r#"{"changes":[{"update":{"id":"mytb:tobie","note":"surreal"}},{"delete":{"id":"mytb:tobie"}},{"define_table":{"drop":false,"id":3,"kind":{"kind":"ANY"},"name":"mytb","permissions":{"create":false,"delete":false,"select":false,"update":false},"schemafull":false}}],"versionstamp":65536}"#
-+			r#"{"changes":[{"update":{"id":"mytb:tobie","note":"surreal"}},{"delete":{"id":"mytb:tobie"}},{"define_table":{"drop":false,"id":3,"id_generation":"DEFAULT","kind":{"kind":"ANY"},"name":"mytb","permissions":{"create":false,"delete":false,"select":false,"update":false},"schemafull":false}}],"versionstamp":65536}"#
- 		);
- 	}
- 
-@@ -280,7 +280,7 @@ mod tests {
- 		let s = serde_json::to_string(&v).unwrap();
- 		assert_eq!(
- 			s,
--			r#"{"changes":[{"current":{"id":"mytb:tobie","note":"surreal"},"update":[{"op":"add","path":"/note","value":"surreal"}]},{"current":{"id":"mytb:tobie2","note":"surreal"},"update":[{"op":"remove","path":"/temp"}]},{"delete":{"id":"mytb:tobie"}},{"delete":{"id":"mytb:tobie","original":{"id":"mytb:tobie","note":"surreal"}}},{"define_table":{"drop":false,"id":3,"kind":{"kind":"ANY"},"name":"mytb","permissions":{"create":false,"delete":false,"select":false,"update":false},"schemafull":false}}],"versionstamp":65536}"#
-+			r#"{"changes":[{"current":{"id":"mytb:tobie","note":"surreal"},"update":[{"op":"add","path":"/note","value":"surreal"}]},{"current":{"id":"mytb:tobie2","note":"surreal"},"update":[{"op":"remove","path":"/temp"}]},{"delete":{"id":"mytb:tobie"}},{"delete":{"id":"mytb:tobie","original":{"id":"mytb:tobie","note":"surreal"}}},{"define_table":{"drop":false,"id":3,"id_generation":"DEFAULT","kind":{"kind":"ANY"},"name":"mytb","permissions":{"create":false,"delete":false,"select":false,"update":false},"schemafull":false}}],"versionstamp":65536}"#
- 		);
- 	}
- }
 diff --git a/surrealdb/core/src/ctx/context.rs b/surrealdb/core/src/ctx/context.rs
 index 382b591c8..340601633 100644
 --- a/surrealdb/core/src/ctx/context.rs
@@ -2686,7 +630,7 @@ index 382b591c8..340601633 100644
  		if let Some(sqs) = self.get_sequences() {
  			Ok(sqs)
 diff --git a/surrealdb/core/src/doc/alter.rs b/surrealdb/core/src/doc/alter.rs
-index 2214a9ccd..6599e01c0 100644
+index 2214a9ccd..0ab3de3e0 100644
 --- a/surrealdb/core/src/doc/alter.rs
 +++ b/surrealdb/core/src/doc/alter.rs
 @@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
@@ -2731,7 +675,7 @@ index 2214a9ccd..6599e01c0 100644
 +		id_kind: Option<&Kind>,
 +	) -> Result<RecordId> {
 +		let tb_def = Arc::clone(self.doc_ctx.tb()?);
-+		match tb_def.id_generation {
++		match self.doc_ctx.id_generation() {
 +			IdGeneration::Default => Self::generate_typed_id(&tb, id_kind),
 +			IdGeneration::Rid => {
 +				let rid = dorsid::rid::next_persistent(None)
@@ -2754,11 +698,263 @@ index 2214a9ccd..6599e01c0 100644
  	/// Clears all of the content of this document.
  	/// This is used to empty the current content
  	/// of the document within a `DELETE` statement.
+diff --git a/surrealdb/core/src/doc/document.rs b/surrealdb/core/src/doc/document.rs
+index 721b0823f..fa49f65c0 100644
+--- a/surrealdb/core/src/doc/document.rs
++++ b/surrealdb/core/src/doc/document.rs
+@@ -8,8 +8,8 @@ use tokio::sync::OnceCell;
+ 
+ use crate::catalog::providers::TableProvider;
+ use crate::catalog::{
+-	DatabaseDefinition, EventDefinition, FieldDefinition, IndexDefinition, NamespaceDefinition,
+-	Record, SubscriptionDefinition, TableDefinition,
++	DatabaseDefinition, EventDefinition, FieldDefinition, IdGeneration, IndexDefinition,
++	NamespaceDefinition, Record, SubscriptionDefinition, TableDefinition,
+ };
+ use crate::ctx::{Context, FrozenContext};
+ use crate::dbs::{Operable, Processable};
+@@ -122,6 +122,16 @@ pub(crate) struct NsDbTbCtx {
+ 	/// can run permission reduction, computed fields, and projection without
+ 	/// async catalog calls.
+ 	pub(crate) fields: Arc<[FieldDefinition]>,
++	/// The table's Dorsid id-generation policy, read from the fork-owned `!ig`
++	/// sidecar key (see [`crate::key::table::ig`]). Loaded once per statement
++	/// alongside the other per-table definitions rather than per record.
++	///
++	/// Deliberately *not* served from the datastore cache: that cache keys on
++	/// the `cache_*_ts` stamps carried by `TableDefinition`, and the policy has
++	/// no such stamp. The per-transaction read cache underneath `txn.get`
++	/// already collapses repeat reads, and going through the transaction keeps
++	/// the policy consistent with the rest of the statement's catalog view.
++	pub(crate) id_generation: IdGeneration,
+ 	/// Index into `fields` of the `id` field definition, if one is defined.
+ 	/// Precomputed once so the write path can read the id field's kind and
+ 	/// default in O(1) without rescanning the field list per record.
+@@ -159,6 +169,10 @@ impl NsDbTbCtx {
+ 			None => ctx.get_cache(),
+ 			Some(_) => None,
+ 		};
++		// Fetch the fork's per-table id-generation policy. An absent key means
++		// the default policy, which is the case for every table that does not
++		// opt into Dorsid ids.
++		let id_generation = txn.get_tb_id_generation(ns, db, table, version).await?;
+ 		// Build the document context
+ 		if let Some(cache) = cache {
+ 			// Fetch the definitions
+@@ -181,6 +195,7 @@ impl NsDbTbCtx {
+ 				db: Arc::clone(&parent.db),
+ 				tb,
+ 				fields,
++				id_generation,
+ 				id_field_idx,
+ 			})
+ 		} else {
+@@ -194,6 +209,7 @@ impl NsDbTbCtx {
+ 				db: Arc::clone(&parent.db),
+ 				tb,
+ 				fields,
++				id_generation,
+ 				id_field_idx,
+ 			})
+ 		}
+@@ -227,6 +243,16 @@ pub(crate) struct NsDbTbMutCtx {
+ 	/// The table's live query subscriptions, notified after the record is
+ 	/// written.
+ 	pub(crate) lives: Arc<[SubscriptionDefinition]>,
++	/// The table's Dorsid id-generation policy, read from the fork-owned `!ig`
++	/// sidecar key (see [`crate::key::table::ig`]). Loaded once per statement
++	/// alongside the other per-table definitions rather than per record.
++	///
++	/// Deliberately *not* served from the datastore cache: that cache keys on
++	/// the `cache_*_ts` stamps carried by `TableDefinition`, and the policy has
++	/// no such stamp. The per-transaction read cache underneath `txn.get`
++	/// already collapses repeat reads, and going through the transaction keeps
++	/// the policy consistent with the rest of the statement's catalog view.
++	pub(crate) id_generation: IdGeneration,
+ 	/// Index into `fields` of the `id` field definition, if one is defined.
+ 	/// Precomputed once so the write path can read the id field's kind and
+ 	/// default in O(1) without rescanning the field list per record.
+@@ -259,6 +285,10 @@ impl NsDbTbMutCtx {
+ 			None => ctx.get_cache(),
+ 			Some(_) => None,
+ 		};
++		// Fetch the fork's per-table id-generation policy. An absent key means
++		// the default policy, which is the case for every table that does not
++		// opt into Dorsid ids.
++		let id_generation = txn.get_tb_id_generation(ns, db, table, version).await?;
+ 		// Build the document context
+ 		if let Some(cache) = cache {
+ 			// Fetch the fields
+@@ -340,6 +370,7 @@ impl NsDbTbMutCtx {
+ 				tables,
+ 				indexes,
+ 				lives,
++				id_generation,
+ 				id_field_idx,
+ 			})
+ 		} else {
+@@ -363,6 +394,7 @@ impl NsDbTbMutCtx {
+ 				tables,
+ 				indexes,
+ 				lives,
++				id_generation,
+ 				id_field_idx,
+ 			})
+ 		}
+@@ -451,6 +483,20 @@ impl DocumentContext {
+ 		}
+ 	}
+ 
++	/// Get the table's Dorsid id-generation policy (fork-local).
++	///
++	/// Returns [`IdGeneration::Default`] when there is no table in context,
++	/// rather than erroring: the default policy is exactly what a table-less
++	/// context implies, and the caller (`generate_default_id`) is only reached
++	/// on paths that do have a table.
++	pub(crate) fn id_generation(&self) -> IdGeneration {
++		match self {
++			DocumentContext::NsDbCtx(_) => IdGeneration::Default,
++			DocumentContext::NsDbTbCtx(ctx) => ctx.id_generation,
++			DocumentContext::NsDbTbMutCtx(ctx) => ctx.id_generation,
++		}
++	}
++
+ 	/// Get the fields to be processed for this document
+ 	pub(crate) fn fd(&self) -> Result<&Arc<[FieldDefinition]>> {
+ 		match self {
+diff --git a/surrealdb/core/src/exec/operators/info/database.rs b/surrealdb/core/src/exec/operators/info/database.rs
+index 745b64ecb..ecb4c8351 100644
+--- a/surrealdb/core/src/exec/operators/info/database.rs
++++ b/surrealdb/core/src/exec/operators/info/database.rs
+@@ -157,7 +157,17 @@ async fn execute_database_info(
+ 			"modules" => crate::expr::statements::info::process_modules(ctx.ctx(), ns, db, txn.all_db_modules(ns, db, version).await?).await,
+ 			"models" => process(&txn.all_db_models(ns, db, version).await?),
+ 			"params" => process(&txn.all_db_params(ns, db, version).await?),
+-			"tables" => process(&txn.all_tb(ns, db, version).await?),
++			"tables" => {
++			// Fork-local: join each table with its `!ig` sidecar policy so
++			// `INFO ... STRUCTURE` reports `id_generation` for Dorsid tables.
++			// Tables on the default policy render exactly as upstream does.
++			let mut values = Vec::new();
++			for v in txn.all_tb(ns, db, version).await?.iter() {
++				let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
++				values.push(v.clone().structure_with_id_generation(ig));
++			}
++			Value::Array(values.into())
++			},
+ 			"users" => process(&txn.all_db_users(ns, db, version).await?),
+ 			"configs" => process(&txn.all_db_configs(ns, db, version).await?),
+ 			"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
+@@ -224,7 +234,13 @@ async fn execute_database_info(
+ 			"tables" => {
+ 				let mut out = Object::default();
+ 				for v in txn.all_tb(ns, db, version).await?.iter() {
+-					out.insert(v.name.clone(), v.to_sql().into());
++					// Fork-local: render the `ID SID` / `ID RID` clause from the
++					// sidecar policy. Default-policy tables render as upstream.
++					let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
++					out.insert(
++						v.name.clone(),
++						v.to_sql_definition_with_id_generation(ig).to_sql().into(),
++					);
+ 				}
+ 				out.into()
+ 			},
+diff --git a/surrealdb/core/src/expr/statements/alter/table.rs b/surrealdb/core/src/expr/statements/alter/table.rs
+index 77090ef81..ee503b888 100644
+--- a/surrealdb/core/src/expr/statements/alter/table.rs
++++ b/surrealdb/core/src/expr/statements/alter/table.rs
+@@ -7,7 +7,7 @@ use tracing::instrument;
+ 
+ use super::AlterKind;
+ use crate::catalog::providers::TableProvider;
+-use crate::catalog::{Permissions, TableType};
++use crate::catalog::{IdGeneration, Permissions, TableType};
+ use crate::ctx::FrozenContext;
+ use crate::dbs::Options;
+ use crate::doc::CursorDoc;
+@@ -50,6 +50,9 @@ pub(crate) struct AlterTableStatement {
+ 	pub(crate) compact: bool,
+ 	/// Change the table type (`NORMAL` / `RELATION` / `ANY`).
+ 	pub kind: Option<TableType>,
++	/// Change the fork's Dorsid id-generation policy (`ID DEFAULT|SID|RID`).
++	/// `None` leaves the existing policy untouched.
++	pub id_generation: Option<IdGeneration>,
+ }
+ 
+ impl Default for AlterTableStatement {
+@@ -63,6 +66,7 @@ impl Default for AlterTableStatement {
+ 			comment: AlterKind::None,
+ 			compact: false,
+ 			kind: None,
++			id_generation: None,
+ 		}
+ 	}
+ }
+@@ -158,6 +162,18 @@ impl AlterTableStatement {
+ 		// Set the table definition
+ 		txn.put_tb(ns_name, db_name, &dt).await?;
+ 
++		// Apply any change to the fork's id-generation policy. It lives in its
++		// own `!ig` key rather than on the table definition, so it is written
++		// here instead of being assigned onto `dt` above. `clear_cache` below
++		// covers the invalidation for both.
++		if let Some(policy) = self.id_generation {
++			let key = crate::key::table::ig::new(ns, db, &name);
++			match policy {
++				IdGeneration::Default => txn.del(&key).await?,
++				policy => txn.set(&key, &policy).await?,
++			}
++		}
++
+ 		// Clear the cache
+ 		txn.clear_cache();
+ 		// Ok all good
+diff --git a/surrealdb/core/src/expr/statements/define/field.rs b/surrealdb/core/src/expr/statements/define/field.rs
+index 1a16ad6c6..438a49937 100644
+--- a/surrealdb/core/src/expr/statements/define/field.rs
++++ b/surrealdb/core/src/expr/statements/define/field.rs
+@@ -192,6 +192,27 @@ impl DefineFieldStatement {
+ 		let (ns_name, db_name) = opt.ns_db()?;
+ 		let (ns, db) = ctx.get_ns_db_ids(opt).await?;
+ 
++		// Mirror of the check in DEFINE TABLE: an `id` field whose kind cannot
++		// hold an integer contradicts an `ID SID` / `ID RID` policy already on
++		// the table, and would otherwise fail every subsequent insert.
++		//
++		// A field carrying a `DEFAULT` is exempt: the `DEFAULT` is evaluated
++		// before the policy is consulted, so the two never meet.
++		if definition.name.is_id()
++			&& matches!(definition.default, crate::catalog::DefineDefault::None)
++			&& let Some(kind) = definition.field_kind.as_ref()
++		{
++			let policy = ctx.tx().get_tb_id_generation(ns, db, &definition.table, None).await?;
++			if !policy.accepts_id_kind(kind) {
++				return Err(Error::IdGenerationKindConflict {
++					table: definition.table.to_string(),
++					policy: policy.as_clause().to_string(),
++					kind: kind.to_sql(),
++				}
++				.into());
++			}
++		}
++
+ 		// Validate computed options
+ 		self.validate_computed_options(ns, db, ctx.tx(), &definition).await?;
+ 
 diff --git a/surrealdb/core/src/expr/statements/define/table.rs b/surrealdb/core/src/expr/statements/define/table.rs
-index 36062c3a6..6cfb09801 100644
+index 36062c3a6..c7e7ac5a0 100644
 --- a/surrealdb/core/src/expr/statements/define/table.rs
 +++ b/surrealdb/core/src/expr/statements/define/table.rs
-@@ -12,8 +12,8 @@ use crate::catalog::aggregation::{
+@@ -4,6 +4,7 @@ use std::sync::Arc;
+ use anyhow::{Result, bail};
+ use reblessive::tree::Stk;
+ use surrealdb_strand::Strand;
++use surrealdb_types::ToSql;
+ use uuid::Uuid;
+ 
+ use super::DefineKind;
+@@ -12,8 +13,8 @@ use crate::catalog::aggregation::{
  };
  use crate::catalog::providers::{DatabaseProvider, NamespaceProvider, TableProvider};
  use crate::catalog::{
@@ -2769,7 +965,7 @@ index 36062c3a6..6cfb09801 100644
  };
  use crate::ctx::FrozenContext;
  use crate::dbs::Options;
-@@ -44,6 +44,7 @@ pub(crate) struct DefineTableStatement {
+@@ -44,6 +45,7 @@ pub(crate) struct DefineTableStatement {
  	pub changefeed: Option<ChangeFeed>,
  	pub comment: Expr,
  	pub table_type: TableType,
@@ -2777,7 +973,7 @@ index 36062c3a6..6cfb09801 100644
  	pub graphql_alias: Option<String>,
  	pub graphql_deprecated: Option<String>,
  }
-@@ -61,6 +62,7 @@ impl Default for DefineTableStatement {
+@@ -61,6 +63,7 @@ impl Default for DefineTableStatement {
  			changefeed: None,
  			comment: Expr::Literal(Literal::None),
  			table_type: TableType::default(),
@@ -2785,20 +981,274 @@ index 36062c3a6..6cfb09801 100644
  			graphql_alias: None,
  			graphql_deprecated: None,
  		}
-@@ -140,6 +142,7 @@ impl DefineTableStatement {
- 			drop: self.drop,
- 			schemafull: self.full,
- 			table_type: self.table_type.clone(),
-+			id_generation: self.id_generation,
- 			view: self.view.clone().map(|v| v.to_definition()).transpose()?,
- 			permissions: self.permissions.clone(),
- 			comment,
+@@ -165,6 +168,47 @@ impl DefineTableStatement {
+ 		// Update the catalog
+ 		let tb = txn.put_tb(ns_name, db_name, &tb_def).await?;
+ 
++		// Persist the fork's per-table id-generation policy in its own key
++		// rather than as a `TableDefinition` field, so the fork never writes
++		// into a revision namespace upstream owns. Writing it here — after
++		// `put_tb`, before the view handling below — means a table redefined as
++		// a view has its policy swept by that branch's `delp`, which is the
++		// behaviour we want: views do not mint ids.
++		//
++		// The `Default` arm deletes rather than writes, so `DEFINE TABLE
++		// OVERWRITE` without an `ID` clause resets a table back to upstream
++		// behaviour and leaves no fork key behind.
++		// Reject a policy that contradicts an existing `id` field kind. Sid and
++		// Rid mint integer keys, so an `id` declared `uuid` (say) would fail
++		// every insert with a coercion error. The contradiction is fully visible
++		// here, so surface it now rather than per write.
++		//
++		// An `id` field carrying a `DEFAULT` is exempt: that `DEFAULT` is
++		// evaluated before the policy is consulted, so the policy never mints a
++		// key for it and the kinds never meet.
++		if self.id_generation != IdGeneration::Default
++			&& let Some(id_field) = txn
++				.all_tb_fields(ns.namespace_id, db.database_id, &name, None)
++				.await?
++				.iter()
++				.find(|fd| fd.name.is_id())
++			&& matches!(id_field.default, crate::catalog::DefineDefault::None)
++			&& let Some(kind) = id_field.field_kind.as_ref()
++			&& !self.id_generation.accepts_id_kind(kind)
++		{
++			bail!(Error::IdGenerationKindConflict {
++				table: name.to_string(),
++				policy: self.id_generation.as_clause().to_string(),
++				kind: kind.to_sql(),
++			});
++		}
++
++		let id_generation_key = crate::key::table::ig::new(ns.namespace_id, db.database_id, &name);
++		match self.id_generation {
++			IdGeneration::Default => txn.del(&id_generation_key).await?,
++			policy => txn.set(&id_generation_key, &policy).await?,
++		}
++
+ 		// Clear the cache
+ 		txn.clear_cache();
+ 
+diff --git a/surrealdb/core/src/expr/statements/info.rs b/surrealdb/core/src/expr/statements/info.rs
+index 26eabc82a..742c18021 100644
+--- a/surrealdb/core/src/expr/statements/info.rs
++++ b/surrealdb/core/src/expr/statements/info.rs
+@@ -191,19 +191,29 @@ impl InfoStatement {
+ 				// Create the result set
+ 				let res = if *structured {
+ 					let object = map! {
+-						"accesses" => process(&txn.all_db_accesses(ns, db, version).await?),
+-						"apis" => process(&txn.all_db_apis(ns, db, version).await?),
+-						"analyzers" => process(&txn.all_db_analyzers(ns, db, version).await?),
+-						"buckets" => process(&txn.all_db_buckets(ns, db, version).await?),
+-						"functions" => process(&txn.all_db_functions(ns, db, version).await?),
+-						"modules" => process_modules(ctx, ns, db, txn.all_db_modules(ns, db, version).await?).await,
+-						"models" => process(&txn.all_db_models(ns, db, version).await?),
+-						"params" => process(&txn.all_db_params(ns, db, version).await?),
+-						"tables" => process(&txn.all_tb(ns, db, version).await?),
+-						"users" => process(&txn.all_db_users(ns, db, version).await?),
+-						"configs" => process(&txn.all_db_configs(ns, db, version).await?),
+-						"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
+-					};
++								"accesses" => process(&txn.all_db_accesses(ns, db, version).await?),
++								"apis" => process(&txn.all_db_apis(ns, db, version).await?),
++								"analyzers" => process(&txn.all_db_analyzers(ns, db, version).await?),
++								"buckets" => process(&txn.all_db_buckets(ns, db, version).await?),
++								"functions" => process(&txn.all_db_functions(ns, db, version).await?),
++								"modules" => process_modules(ctx, ns, db, txn.all_db_modules(ns, db, version).await?).await,
++								"models" => process(&txn.all_db_models(ns, db, version).await?),
++								"params" => process(&txn.all_db_params(ns, db, version).await?),
++								"tables" => {
++								// Fork-local: join each table with its `!ig` sidecar policy so
++								// `INFO ... STRUCTURE` reports `id_generation` for Dorsid tables.
++								// Tables on the default policy render exactly as upstream does.
++								let mut values = Vec::new();
++								for v in txn.all_tb(ns, db, version).await?.iter() {
++									let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
++									values.push(v.clone().structure_with_id_generation(ig));
++								}
++								Value::Array(values.into())
++					},
++								"users" => process(&txn.all_db_users(ns, db, version).await?),
++								"configs" => process(&txn.all_db_configs(ns, db, version).await?),
++								"sequences" => process(&txn.all_db_sequences(ns, db, version).await?),
++							};
+ 					Value::Object(Object::from(object))
+ 				} else {
+ 					let object = map! {
+@@ -264,11 +274,17 @@ impl InfoStatement {
+ 							out.into()
+ 						},
+ 						"tables" => {
+-							let mut out = Object::default();
+-							for v in txn.all_tb(ns, db, version).await?.iter() {
+-								out.insert(v.name.clone(), v.to_sql().into());
+-							}
+-							out.into()
++						let mut out = Object::default();
++						for v in txn.all_tb(ns, db, version).await?.iter() {
++							// Fork-local: render the `ID SID` / `ID RID` clause from the
++							// sidecar policy. Default-policy tables render as upstream.
++							let ig = txn.get_tb_id_generation(ns, db, &v.name, version).await?;
++							out.insert(
++								v.name.clone(),
++								v.to_sql_definition_with_id_generation(ig).to_sql().into(),
++							);
++						}
++						out.into()
+ 						},
+ 						"users" => {
+ 							let mut out = Object::default();
+diff --git a/surrealdb/core/src/key/category.rs b/surrealdb/core/src/key/category.rs
+index 60a3b670d..f4b109064 100644
+--- a/surrealdb/core/src/key/category.rs
++++ b/surrealdb/core/src/key/category.rs
+@@ -128,6 +128,9 @@ pub enum Category {
+ 	IndexDefinition,
+ 	/// crate::key::table::lq                /*{ns}*{db}*{tb}!lq{lq}
+ 	TableLiveQuery,
++	/// crate::key::table::ig                /*{ns}*{db}*{tb}!ig
++	/// Fork-local: per-table Dorsid id-generation policy (customware/001).
++	TableIdGeneration,
+ 	///
+ 	/// ------------------------------
+ 	///
+@@ -268,6 +271,7 @@ impl Display for Category {
+ 			Self::TableView => "TableView",
+ 			Self::IndexDefinition => "IndexDefinition",
+ 			Self::TableLiveQuery => "TableLiveQuery",
++			Self::TableIdGeneration => "TableIdGeneration",
+ 			Self::IndexRoot => "IndexRoot",
+ 			Self::IndexTermDocList => "IndexTermDocList",
+ 			Self::IndexBTreeNode => "IndexBTreeNode",
+diff --git a/surrealdb/core/src/key/table/ig.rs b/surrealdb/core/src/key/table/ig.rs
+new file mode 100644
+index 000000000..4e63ec8a6
+--- /dev/null
++++ b/surrealdb/core/src/key/table/ig.rs
+@@ -0,0 +1,104 @@
++//! Stores this fork's per-table Dorsid id-generation policy.
++//!
++//! # Why this is a sidecar key rather than a `TableDefinition` field
++//!
++//! `IdGeneration` used to live as a field on [`crate::catalog::TableDefinition`],
++//! which is an upstream-owned revisioned struct. That put the fork's field in
++//! upstream's revision namespace: when upstream took revision 3 for
++//! `cache_lives_ts`, the fork's revision-3 layout and upstream's revision-3
++//! layout became two different things wearing the same number, and data written
++//! by either side misdecoded on the other.
++//!
++//! There is no way to version around that. `revision-derive` validates revision
++//! contiguity at compile time (`resolve_history`: "revisions must be contiguous
++//! starting from 1"), so the fork cannot claim a reserved high range, and the
++//! decode arms are generated from the declared history rather than dispatched at
++//! runtime.
++//!
++//! Storing the policy under a fork-owned key tag instead makes the collision
++//! structurally impossible: [`IdGeneration`] is a fork-owned revisioned type
++//! whose revision number only this fork can ever bump.
++//!
++//! See `customware/README.md` for the general rule this is an instance of, and
++//! `customware/001-dorsid-first-class-record-ids.md` for the full history.
++//!
++//! # Lifecycle
++//!
++//! The key lives under [`TableRoot`], so it is removed automatically by the
++//! single prefix delete that `REMOVE TABLE` performs — no explicit cleanup
++//! exists or is needed, exactly as for `!ev` / `!fd` / `!ix`. The same sweep
++//! runs when a table is redefined as a view and on the ALTER compaction path,
++//! which correctly resets the policy in both cases.
++//!
++//! **An absent key means [`IdGeneration::Default`].** No key is written for
++//! tables using the default policy, so a table that does not opt into Dorsid ids
++//! leaves no fork-specific trace in the keyspace at all.
++
++use storekey::{BorrowDecode, Encode};
++
++use crate::catalog::{DatabaseId, IdGeneration, NamespaceId};
++use crate::key::category::{Categorise, Category};
++use crate::key::table::all::TableRoot;
++use crate::kvs::impl_kv_key_storekey;
++use crate::val::TableName;
++
++/// Key structure for the per-table Dorsid id-generation policy.
++///
++/// Encodes as `/*{ns}*{db}*{tb}\0!ig` — a singleton per table, so there is no
++/// trailing name component.
++#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Encode, BorrowDecode)]
++#[storekey(format = "()")]
++pub(crate) struct Ig<'a> {
++	table_root: TableRoot<'a>,
++	_c: u8,
++	_d: u8,
++	_e: u8,
++}
++
++impl_kv_key_storekey!(Ig<'_> => IdGeneration);
++
++impl Categorise for Ig<'_> {
++	fn categorise(&self) -> Category {
++		Category::TableIdGeneration
++	}
++}
++
++impl<'a> Ig<'a> {
++	/// Creates a new id-generation policy key for the given table.
++	pub fn new(ns: NamespaceId, db: DatabaseId, tb: &'a TableName) -> Self {
++		Ig {
++			table_root: TableRoot::new(ns, db, tb),
++			_c: b'!',
++			_d: b'i',
++			_e: b'g',
++		}
++	}
++}
++
++pub fn new<'a>(ns: NamespaceId, db: DatabaseId, tb: &'a TableName) -> Ig<'a> {
++	Ig::new(ns, db, tb)
++}
++
++#[cfg(test)]
++mod tests {
++	use super::*;
++	use crate::kvs::KVKey;
++
++	#[test]
++	fn key() {
++		let tb = TableName::from("testtb");
++		let val = Ig::new(NamespaceId(1), DatabaseId(2), &tb);
++		let enc = Ig::encode_key(&val).unwrap();
++		assert_eq!(enc, b"/*\x00\x00\x00\x01*\x00\x00\x00\x02*testtb\0!ig");
++	}
++
++	/// The key must sort inside the table's own prefix, which is what makes the
++	/// `REMOVE TABLE` prefix sweep collect it without explicit cleanup.
++	#[test]
++	fn key_is_under_table_root() {
++		let tb = TableName::from("testtb");
++		let root = TableRoot::new(NamespaceId(1), DatabaseId(2), &tb).encode_key().unwrap();
++		let key = Ig::new(NamespaceId(1), DatabaseId(2), &tb).encode_key().unwrap();
++		assert!(key.starts_with(&root), "!ig key must live under the table root prefix");
++	}
++}
+diff --git a/surrealdb/core/src/key/table/mod.rs b/surrealdb/core/src/key/table/mod.rs
+index 0f76608c0..ab6819bcb 100644
+--- a/surrealdb/core/src/key/table/mod.rs
++++ b/surrealdb/core/src/key/table/mod.rs
+@@ -7,6 +7,7 @@ pub mod bt;
+ pub mod ev;
+ pub mod fd;
+ pub mod ft;
++pub mod ig;
+ pub mod ih;
+ pub mod is;
+ pub mod ix;
 diff --git a/surrealdb/core/src/kvs/dorsid.rs b/surrealdb/core/src/kvs/dorsid.rs
 new file mode 100644
-index 000000000..c35dd964f
+index 000000000..48ea784c6
 --- /dev/null
 +++ b/surrealdb/core/src/kvs/dorsid.rs
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,271 @@
 +//! In-process Dorsid `Sid` generator registry.
 +//!
 +//! One [`dorsid::sid::Generator`] is maintained per `(NamespaceId, DatabaseId, TableId)`
@@ -2988,6 +1438,88 @@ index 000000000..c35dd964f
 +			.finish()
 +	}
 +}
++
++#[cfg(all(test, feature = "kv-surrealkv"))]
++mod tests {
++	use surrealdb_types::{RecordIdKey, Value};
++	use temp_dir::TempDir;
++
++	use crate::dbs::Session;
++	use crate::kvs::Datastore;
++
++	/// Run a statement and fail loudly if any result in it errored.
++	///
++	/// `Datastore::execute` returns `Ok` for a batch whose statements failed —
++	/// the per-statement error is inside the `QueryResult` — so a bare
++	/// `.expect()` on the outer result silently ignores DDL failures.
++	async fn execute_ok(ds: &Datastore, session: &Session, sql: &str) {
++		let results = ds.execute(sql, session, None).await.expect("execute should dispatch");
++		for result in results {
++			result.result.unwrap_or_else(|e| panic!("statement failed: {sql}: {e}"));
++		}
++	}
++
++	/// Extract the integer record-id key from a `CREATE ... RETURN VALUE id`
++	/// response.
++	async fn create_sid(ds: &Datastore, session: &Session) -> i64 {
++		let mut res = ds
++			.execute("CREATE ONLY sid_tb RETURN VALUE id", session, None)
++			.await
++			.expect("create should succeed");
++		let value = res.remove(0).result.expect("create should not error");
++		let Value::RecordId(rid) = value else {
++			panic!("expected a record id, got {value:?}");
++		};
++		match rid.key {
++			RecordIdKey::Number(n) => n,
++			other => panic!("expected an integer Sid key, got {other:?}"),
++		}
++	}
++
++	/// The Sid generator is process-local: a fresh `Datastore` over an existing
++	/// store starts with an empty registry and must warm its floor from the
++	/// highest Sid already persisted, or it would re-mint ids that already
++	/// exist.
++	///
++	/// This is the one part of the Sid path that a fresh-datastore test cannot
++	/// reach, and it is also the part that protects against clock regression,
++	/// so it gets a dedicated restart test over a real on-disk backend.
++	#[tokio::test]
++	async fn sid_floor_warms_from_stored_keys_after_restart() {
++		let dir = TempDir::new().expect("temp dir");
++		let path = format!("surrealkv://{}", dir.child("warmup.skv").display());
++		let session = Session::owner().with_ns("test").with_db("test");
++
++		// First boot: define an `ID SID` table and mint a few ids.
++		let highest = {
++			let ds = Datastore::new(&path).await.expect("open datastore");
++			execute_ok(
++				&ds,
++				&session,
++				"DEFINE NAMESPACE test; DEFINE DATABASE test; DEFINE TABLE sid_tb ID SID",
++			)
++			.await;
++
++			let mut highest = i64::MIN;
++			for _ in 0..3 {
++				highest = highest.max(create_sid(&ds, &session).await);
++			}
++			ds.shutdown().await.expect("shutdown");
++			highest
++		};
++
++		// Second boot over the same store: the registry is empty, so the next
++		// mint must come from a floor seeded by scanning what is on disk.
++		let ds = Datastore::new(&path).await.expect("reopen datastore");
++		let after_restart = create_sid(&ds, &session).await;
++
++		assert!(
++			after_restart > highest,
++			"Sid after restart ({after_restart}) must exceed the highest persisted id \
++			 ({highest}); the generator did not warm its floor from stored keys"
++		);
++	}
++}
 diff --git a/surrealdb/core/src/kvs/ds/builder.rs b/surrealdb/core/src/kvs/ds/builder.rs
 index cbdd2902d..4a1945e6a 100644
 --- a/surrealdb/core/src/kvs/ds/builder.rs
@@ -3008,6 +1540,25 @@ index cbdd2902d..4a1945e6a 100644
  			async_event_trigger,
  			#[cfg(feature = "surrealism")]
  			surrealism_cache: Arc::new(SurrealismCache::new(config.surrealism_cache_size)),
+diff --git a/surrealdb/core/src/kvs/export.rs b/surrealdb/core/src/kvs/export.rs
+index 43beb8638..6d6eef90f 100644
+--- a/surrealdb/core/src/kvs/export.rs
++++ b/surrealdb/core/src/kvs/export.rs
+@@ -347,7 +347,13 @@ impl Transaction {
+ 		chn.send(bytes!(format!("-- TABLE: {}", InlineCommentDisplay(&table.name)))).await?;
+ 		chn.send(bytes!("-- ------------------------------")).await?;
+ 		chn.send(bytes!("")).await?;
+-		chn.send(bytes!(format!("{};", table.to_sql()))).await?;
++		// Fork-local: render the table with its `!ig` sidecar policy so an
++		// exported `DEFINE TABLE` carries the `ID SID` / `ID RID` clause and
++		// round-trips through import. Default-policy tables export exactly as
++		// upstream does.
++		let id_generation = self.get_tb_id_generation(ns, db, &table.name, None).await?;
++		let definition = table.to_sql_definition_with_id_generation(id_generation);
++		chn.send(bytes!(format!("{};", definition.to_sql()))).await?;
+ 		chn.send(bytes!("")).await?;
+ 		// Export all table field definitions with OVERWRITE to ensure
+ 		// idempotent re-import (relation tables auto-generate in/out fields,
 diff --git a/surrealdb/core/src/kvs/mod.rs b/surrealdb/core/src/kvs/mod.rs
 index 37d51b742..9071aeb3e 100644
 --- a/surrealdb/core/src/kvs/mod.rs
@@ -3021,10 +1572,47 @@ index 37d51b742..9071aeb3e 100644
  pub(crate) mod sequences;
  pub(crate) mod slowlog;
 diff --git a/surrealdb/core/src/kvs/tx.rs b/surrealdb/core/src/kvs/tx.rs
-index d5e31b5af..fba3525fe 100644
+index d5e31b5af..05d565a61 100644
 --- a/surrealdb/core/src/kvs/tx.rs
 +++ b/surrealdb/core/src/kvs/tx.rs
-@@ -1830,6 +1830,22 @@ impl Transaction {
+@@ -36,8 +36,8 @@ use crate::catalog::providers::{
+ 	DatabaseProvider, NamespaceProvider, NodeProvider, RootProvider, TableProvider, UserProvider,
+ };
+ use crate::catalog::{
+-	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig, IndexId,
+-	NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
++	self, ApiDefinition, ConfigDefinition, DatabaseDefinition, DatabaseId, DefaultConfig,
++	IdGeneration, IndexId, NamespaceDefinition, NamespaceId, Record, TableDefinition, TableId,
+ };
+ use crate::cf::Changefeed;
+ use crate::cnf::CommonConfig;
+@@ -1276,6 +1276,25 @@ impl Transaction {
+ 		Ok(found)
+ 	}
+ 
++	/// Fetch a table's Dorsid id-generation policy (fork-local).
++	///
++	/// The policy lives under the fork-owned `!ig` key rather than on
++	/// [`TableDefinition`], so that the fork never occupies a revision number in
++	/// a struct upstream also extends. See [`crate::key::table::ig`].
++	///
++	/// An absent key means [`IdGeneration::Default`], which is the case for
++	/// every table that has not opted into Dorsid ids.
++	pub async fn get_tb_id_generation(
++		&self,
++		ns: NamespaceId,
++		db: DatabaseId,
++		tb: &crate::val::TableName,
++		version: Option<u64>,
++	) -> Result<IdGeneration> {
++		let key = crate::key::table::ig::new(ns, db, tb);
++		Ok(self.get(&key, version).await?.unwrap_or_default())
++	}
++
+ 	/// Fetch a key from the datastore.
+ 	#[instrument(level = "trace", target = "surrealdb::core::kvs::tx", skip_all)]
+ 	pub async fn get<K>(&self, key: &K, version: Option<u64>) -> Result<Option<K::ValueType>>
+@@ -1830,6 +1849,22 @@ impl Transaction {
  		Ok(res.values)
  	}
  
@@ -3059,6 +1647,66 @@ index 9f76e2b42..d8facb040 100644
 +pub(crate) use self::table_type::{IdGeneration, TableType};
  pub(crate) use self::view::View;
  pub(crate) use self::with::With;
+diff --git a/surrealdb/core/src/sql/statements/alter/table.rs b/surrealdb/core/src/sql/statements/alter/table.rs
+index 40d03be09..a22eeca49 100644
+--- a/surrealdb/core/src/sql/statements/alter/table.rs
++++ b/surrealdb/core/src/sql/statements/alter/table.rs
+@@ -2,7 +2,7 @@ use surrealdb_types::{SqlFormat, ToSql, write_sql};
+ 
+ use super::AlterKind;
+ use crate::fmt::{CoverStmts, EscapeKwFreeIdent, QuoteStr};
+-use crate::sql::{ChangeFeed, Expr, Literal, Permissions, TableType};
++use crate::sql::{ChangeFeed, Expr, IdGeneration, Literal, Permissions, TableType};
+ 
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+@@ -26,6 +26,9 @@ pub struct AlterTableStatement {
+ 	pub changefeed: AlterKind<ChangeFeed>,
+ 	pub comment: AlterKind<String>,
+ 	pub kind: Option<TableType>,
++	/// Change the fork's Dorsid id-generation policy. `None` leaves it alone;
++	/// `Some(IdGeneration::Default)` resets the table to upstream behaviour.
++	pub id_generation: Option<IdGeneration>,
+ 	/// Request table‑level compaction when true.
+ 	pub compact: bool,
+ }
+@@ -40,6 +43,7 @@ impl Default for AlterTableStatement {
+ 			changefeed: AlterKind::None,
+ 			comment: AlterKind::None,
+ 			kind: None,
++			id_generation: None,
+ 			compact: false,
+ 		}
+ 	}
+@@ -102,6 +106,12 @@ impl ToSql for AlterTableStatement {
+ 			AlterKind::Drop => f.push_str(" DROP CHANGEFEED"),
+ 			AlterKind::None => {}
+ 		}
++		match self.id_generation {
++			None => {}
++			Some(IdGeneration::Default) => write_sql!(f, fmt, " ID DEFAULT"),
++			Some(IdGeneration::Sid) => write_sql!(f, fmt, " ID SID"),
++			Some(IdGeneration::Rid) => write_sql!(f, fmt, " ID RID"),
++		}
+ 		if let Some(permissions) = &self.permissions {
+ 			write_sql!(f, fmt, " {permissions}");
+ 		}
+@@ -122,6 +132,7 @@ impl From<AlterTableStatement> for crate::expr::statements::alter::AlterTableSta
+ 			changefeed: v.changefeed.into(),
+ 			comment: v.comment.into(),
+ 			kind: v.kind.map(Into::into),
++			id_generation: v.id_generation.map(Into::into),
+ 			compact: v.compact,
+ 		}
+ 	}
+@@ -137,6 +148,7 @@ impl From<crate::expr::statements::alter::AlterTableStatement> for AlterTableSta
+ 			changefeed: v.changefeed.into(),
+ 			comment: v.comment.into(),
+ 			kind: v.kind.map(Into::into),
++			id_generation: v.id_generation.map(Into::into),
+ 			compact: v.compact,
+ 		}
+ 	}
 diff --git a/surrealdb/core/src/sql/statements/define/table.rs b/surrealdb/core/src/sql/statements/define/table.rs
 index 60f01da98..5684dc722 100644
 --- a/surrealdb/core/src/sql/statements/define/table.rs
@@ -3154,6 +1802,19 @@ index f1333319c..4862bca79 100644
 +		}
 +	}
 +}
+diff --git a/surrealdb/core/src/sql/test_to_sql.rs b/surrealdb/core/src/sql/test_to_sql.rs
+index 9c2232662..f91ad8061 100644
+--- a/surrealdb/core/src/sql/test_to_sql.rs
++++ b/surrealdb/core/src/sql/test_to_sql.rs
+@@ -172,7 +172,7 @@ use crate::val::{Bytes, Duration, File, Geometry, Number, Object, RecordId, Set,
+ // Expression: Upsert
+ #[case::expr_upsert(Expr::Upsert(Box::new(UpsertStatement { only: false, what: vec![Expr::Table("user".into())], with: None, data: None, cond: None, output: None, timeout: Expr::Literal(Literal::None), explain: None })), "UPSERT user", "UPSERT user")]
+ // Expression: Alter
+-#[case::expr_alter(Expr::Alter(Box::new(AlterStatement::Table(AlterTableStatement { name: Expr::Table("user".into()), if_exists: false, schemafull: AlterKind::None, permissions: None, changefeed: AlterKind::None, comment: AlterKind::None, kind: None, compact: false }))), "ALTER TABLE user", "ALTER TABLE user")]
++#[case::expr_alter(Expr::Alter(Box::new(AlterStatement::Table(AlterTableStatement { name: Expr::Table("user".into()), if_exists: false, schemafull: AlterKind::None, permissions: None, changefeed: AlterKind::None, comment: AlterKind::None, kind: None, id_generation: None, compact: false }))), "ALTER TABLE user", "ALTER TABLE user")]
+ // Expression: Info
+ #[case::expr_info(
+ 	Expr::Info(Box::new(InfoStatement::Root(false, None))),
 diff --git a/surrealdb/core/src/syn/lexer/keywords.rs b/surrealdb/core/src/syn/lexer/keywords.rs
 index 240a577ae..5f3ce8cd4 100644
 --- a/surrealdb/core/src/syn/lexer/keywords.rs
@@ -3182,6 +1843,52 @@ index 240a577ae..5f3ce8cd4 100644
  	UniCase::ascii("SIGNIN") => TokenKind::Keyword(Keyword::Signin),
  	UniCase::ascii("SIGNUP") => TokenKind::Keyword(Keyword::Signup),
  	UniCase::ascii("SINCE") => TokenKind::Keyword(Keyword::Since),
+diff --git a/surrealdb/core/src/syn/parser/stmt/alter.rs b/surrealdb/core/src/syn/parser/stmt/alter.rs
+index f9eff7efb..ff2d9b2cd 100644
+--- a/surrealdb/core/src/syn/parser/stmt/alter.rs
++++ b/surrealdb/core/src/syn/parser/stmt/alter.rs
+@@ -2,7 +2,6 @@ use reblessive::Stk;
+ 
+ use crate::catalog::{ApiMethod, EventDefinition, EventKind};
+ use crate::expr::statements::define::kind_contains_object;
+-use crate::sql::TableType;
+ use crate::sql::filter::Filter;
+ use crate::sql::statements::alter::field::AlterDefault;
+ use crate::sql::statements::alter::{
+@@ -15,6 +14,7 @@ use crate::sql::statements::alter::{
+ use crate::sql::statements::define::ApiAction;
+ use crate::sql::statements::{AlterStatement, AlterTableStatement};
+ use crate::sql::tokenizer::Tokenizer;
++use crate::sql::{IdGeneration, TableType};
+ use crate::syn::error::bail;
+ use crate::syn::parser::mac::{expected, expected_whitespace, unexpected};
+ use crate::syn::parser::{ParseResult, Parser};
+@@ -195,6 +195,25 @@ impl Parser<'_> {
+ 					self.pop_peek();
+ 					res.changefeed = AlterKind::Set(self.parse_changefeed()?)
+ 				}
++				t!("ID") => {
++					self.pop_peek();
++					let peek = self.peek();
++					match peek.kind {
++						t!("DEFAULT") => {
++							self.pop_peek();
++							res.id_generation = Some(IdGeneration::Default);
++						}
++						t!("SID") => {
++							self.pop_peek();
++							res.id_generation = Some(IdGeneration::Sid);
++						}
++						t!("RID") => {
++							self.pop_peek();
++							res.id_generation = Some(IdGeneration::Rid);
++						}
++						_ => unexpected!(self, peek, "`DEFAULT`, `SID`, or `RID`"),
++					}
++				}
+ 				_ => break,
+ 			}
+ 		}
 diff --git a/surrealdb/core/src/syn/parser/stmt/define.rs b/surrealdb/core/src/syn/parser/stmt/define.rs
 index a3d5f67a4..f3c3f7e03 100644
 --- a/surrealdb/core/src/syn/parser/stmt/define.rs
