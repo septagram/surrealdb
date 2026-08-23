@@ -192,6 +192,27 @@ impl DefineFieldStatement {
 		let (ns_name, db_name) = opt.ns_db()?;
 		let (ns, db) = ctx.get_ns_db_ids(opt).await?;
 
+		// Mirror of the check in DEFINE TABLE: an `id` field whose kind cannot
+		// hold an integer contradicts an `ID SID` / `ID RID` policy already on
+		// the table, and would otherwise fail every subsequent insert.
+		//
+		// A field carrying a `DEFAULT` is exempt: the `DEFAULT` is evaluated
+		// before the policy is consulted, so the two never meet.
+		if definition.name.is_id()
+			&& matches!(definition.default, crate::catalog::DefineDefault::None)
+			&& let Some(kind) = definition.field_kind.as_ref()
+		{
+			let policy = ctx.tx().get_tb_id_generation(ns, db, &definition.table, None).await?;
+			if !policy.accepts_id_kind(kind) {
+				return Err(Error::IdGenerationKindConflict {
+					table: definition.table.to_string(),
+					policy: policy.as_clause().to_string(),
+					kind: kind.to_sql(),
+				}
+				.into());
+			}
+		}
+
 		// Validate computed options
 		self.validate_computed_options(ns, db, ctx.tx(), &definition).await?;
 

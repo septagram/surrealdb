@@ -2,7 +2,7 @@ use surrealdb_types::{SqlFormat, ToSql, write_sql};
 
 use super::AlterKind;
 use crate::fmt::{CoverStmts, EscapeKwFreeIdent, QuoteStr};
-use crate::sql::{ChangeFeed, Expr, Literal, Permissions, TableType};
+use crate::sql::{ChangeFeed, Expr, IdGeneration, Literal, Permissions, TableType};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -26,6 +26,9 @@ pub struct AlterTableStatement {
 	pub changefeed: AlterKind<ChangeFeed>,
 	pub comment: AlterKind<String>,
 	pub kind: Option<TableType>,
+	/// Change the fork's Dorsid id-generation policy. `None` leaves it alone;
+	/// `Some(IdGeneration::Default)` resets the table to upstream behaviour.
+	pub id_generation: Option<IdGeneration>,
 	/// Request table‑level compaction when true.
 	pub compact: bool,
 }
@@ -40,6 +43,7 @@ impl Default for AlterTableStatement {
 			changefeed: AlterKind::None,
 			comment: AlterKind::None,
 			kind: None,
+			id_generation: None,
 			compact: false,
 		}
 	}
@@ -102,6 +106,12 @@ impl ToSql for AlterTableStatement {
 			AlterKind::Drop => f.push_str(" DROP CHANGEFEED"),
 			AlterKind::None => {}
 		}
+		match self.id_generation {
+			None => {}
+			Some(IdGeneration::Default) => write_sql!(f, fmt, " ID DEFAULT"),
+			Some(IdGeneration::Sid) => write_sql!(f, fmt, " ID SID"),
+			Some(IdGeneration::Rid) => write_sql!(f, fmt, " ID RID"),
+		}
 		if let Some(permissions) = &self.permissions {
 			write_sql!(f, fmt, " {permissions}");
 		}
@@ -122,6 +132,7 @@ impl From<AlterTableStatement> for crate::expr::statements::alter::AlterTableSta
 			changefeed: v.changefeed.into(),
 			comment: v.comment.into(),
 			kind: v.kind.map(Into::into),
+			id_generation: v.id_generation.map(Into::into),
 			compact: v.compact,
 		}
 	}
@@ -137,6 +148,7 @@ impl From<crate::expr::statements::alter::AlterTableStatement> for AlterTableSta
 			changefeed: v.changefeed.into(),
 			comment: v.comment.into(),
 			kind: v.kind.map(Into::into),
+			id_generation: v.id_generation.map(Into::into),
 			compact: v.compact,
 		}
 	}

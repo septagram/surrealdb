@@ -6,8 +6,12 @@ Lifecycle and precedence rules for the fork's `ID SID` / `ID RID` policy
 
 The policy lives in its own `!ig` key under the table root rather than on
 `TableDefinition`, so its lifecycle is not automatic — this pins the cases where
-it must be reset, and the two interactions with upstream 3.2's id-field
-handling, which are currently unguarded by design.
+it must be reset, plus the precedence rule that an `id` field `DEFAULT` wins
+over the table's policy.
+
+The opposite interaction — an `id` kind that cannot hold a Sid — is rejected at
+definition time and is covered by
+`language/statements/alter/alter_table_id_generation.surql`.
 """
 
 [[test.results]]
@@ -55,18 +59,6 @@ value = "NONE"
 [[test.results]]
 value = "'pinned'"
 
-[[test.results]]
-value = "NONE"
-
-[[test.results]]
-value = "NONE"
-
-# The minted Sid is time-dependent, so match on the shape of the coercion
-# failure rather than the literal key.
-[[test.results]]
-match = "$error CONTAINS 'Expected `uuid` but found'"
-error = true
-
 */
 
 -- DEFINE TABLE OVERWRITE without an `ID` clause resets the policy to default.
@@ -91,10 +83,3 @@ DEFINE TABLE default_wins ID SID SCHEMAFULL;
 DEFINE FIELD id ON default_wins TYPE string DEFAULT "pinned";
 LET $defaulted = (CREATE ONLY default_wins RETURN VALUE id);
 record::id($defaulted);
-
--- A declared `id` kind that cannot hold an i64 makes `ID SID` fail on every
--- insert: the minted integer key is rejected by `coerce_id_key`. The
--- contradiction is visible at DEFINE time but not currently rejected there.
-DEFINE TABLE contradiction ID SID SCHEMAFULL;
-DEFINE FIELD id ON contradiction TYPE uuid;
-CREATE contradiction;

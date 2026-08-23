@@ -1297,6 +1297,19 @@ pub(crate) enum Error {
 		kind: String,
 	},
 
+	/// A table's Dorsid id-generation policy cannot satisfy its declared `id`
+	/// kind. Fork-local (customware/001): `SID` and `RID` mint 64-bit integer
+	/// keys, so an `id` field that cannot hold an integer would reject every
+	/// insert at runtime. Rejected at definition time instead.
+	#[error(
+		"Table `{table}` uses `ID {policy}`, which generates integer record ids, but its `id` field is declared as `{kind}`. Declare the `id` field as `int`, `number` or `any`, or use `ID DEFAULT`."
+	)]
+	IdGenerationKindConflict {
+		table: String,
+		policy: String,
+		kind: String,
+	},
+
 	#[error(
 		"Error with the event {0}. The ID of the namespace `{1}` does not match the namespace this event has been generated from."
 	)]

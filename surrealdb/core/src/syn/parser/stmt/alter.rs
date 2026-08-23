@@ -2,7 +2,6 @@ use reblessive::Stk;
 
 use crate::catalog::{ApiMethod, EventDefinition, EventKind};
 use crate::expr::statements::define::kind_contains_object;
-use crate::sql::TableType;
 use crate::sql::filter::Filter;
 use crate::sql::statements::alter::field::AlterDefault;
 use crate::sql::statements::alter::{
@@ -15,6 +14,7 @@ use crate::sql::statements::alter::{
 use crate::sql::statements::define::ApiAction;
 use crate::sql::statements::{AlterStatement, AlterTableStatement};
 use crate::sql::tokenizer::Tokenizer;
+use crate::sql::{IdGeneration, TableType};
 use crate::syn::error::bail;
 use crate::syn::parser::mac::{expected, expected_whitespace, unexpected};
 use crate::syn::parser::{ParseResult, Parser};
@@ -194,6 +194,25 @@ impl Parser<'_> {
 				t!("CHANGEFEED") => {
 					self.pop_peek();
 					res.changefeed = AlterKind::Set(self.parse_changefeed()?)
+				}
+				t!("ID") => {
+					self.pop_peek();
+					let peek = self.peek();
+					match peek.kind {
+						t!("DEFAULT") => {
+							self.pop_peek();
+							res.id_generation = Some(IdGeneration::Default);
+						}
+						t!("SID") => {
+							self.pop_peek();
+							res.id_generation = Some(IdGeneration::Sid);
+						}
+						t!("RID") => {
+							self.pop_peek();
+							res.id_generation = Some(IdGeneration::Rid);
+						}
+						_ => unexpected!(self, peek, "`DEFAULT`, `SID`, or `RID`"),
+					}
 				}
 				_ => break,
 			}

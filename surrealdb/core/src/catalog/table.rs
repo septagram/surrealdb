@@ -230,6 +230,47 @@ pub enum IdGeneration {
 
 impl_kv_value_revisioned!(IdGeneration);
 
+impl IdGeneration {
+	/// The SurrealQL spelling of this policy, for diagnostics.
+	pub(crate) fn as_clause(self) -> &'static str {
+		match self {
+			IdGeneration::Default => "DEFAULT",
+			IdGeneration::Sid => "SID",
+			IdGeneration::Rid => "RID",
+		}
+	}
+
+	/// Whether a key minted by this policy can satisfy a declared `id` kind.
+	///
+	/// `Sid` and `Rid` mint `RecordIdKey::Number(i64)`, which then flows through
+	/// `Document::coerce_id_key` like any other key. If the declared kind cannot
+	/// hold an integer, that coercion fails on *every* insert — so the
+	/// contradiction is rejected when the schema is defined rather than left to
+	/// surface per write.
+	///
+	/// Mirrors `coerce_id_key`: record kinds constrain the outer record rather
+	/// than the key, so they impose no constraint here.
+	pub(crate) fn accepts_id_kind(self, kind: &Kind) -> bool {
+		match self {
+			// The default policy defers to upstream's kind-aware synthesis,
+			// which handles (or rejects) every kind on its own terms.
+			IdGeneration::Default => true,
+			IdGeneration::Sid | IdGeneration::Rid => Self::kind_holds_integer(kind),
+		}
+	}
+
+	fn kind_holds_integer(kind: &Kind) -> bool {
+		match kind {
+			Kind::Any | Kind::Int | Kind::Number => true,
+			// Constrains the record, not the key.
+			k if k.is_record() => true,
+			// A union is satisfiable if any branch is.
+			Kind::Either(kinds) => kinds.iter().any(Self::kind_holds_integer),
+			_ => false,
+		}
+	}
+}
+
 impl InfoStructure for IdGeneration {
 	fn structure(self) -> Value {
 		match self {

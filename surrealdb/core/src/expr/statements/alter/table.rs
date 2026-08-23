@@ -7,7 +7,7 @@ use tracing::instrument;
 
 use super::AlterKind;
 use crate::catalog::providers::TableProvider;
-use crate::catalog::{Permissions, TableType};
+use crate::catalog::{IdGeneration, Permissions, TableType};
 use crate::ctx::FrozenContext;
 use crate::dbs::Options;
 use crate::doc::CursorDoc;
@@ -50,6 +50,9 @@ pub(crate) struct AlterTableStatement {
 	pub(crate) compact: bool,
 	/// Change the table type (`NORMAL` / `RELATION` / `ANY`).
 	pub kind: Option<TableType>,
+	/// Change the fork's Dorsid id-generation policy (`ID DEFAULT|SID|RID`).
+	/// `None` leaves the existing policy untouched.
+	pub id_generation: Option<IdGeneration>,
 }
 
 impl Default for AlterTableStatement {
@@ -63,6 +66,7 @@ impl Default for AlterTableStatement {
 			comment: AlterKind::None,
 			compact: false,
 			kind: None,
+			id_generation: None,
 		}
 	}
 }
@@ -157,6 +161,18 @@ impl AlterTableStatement {
 
 		// Set the table definition
 		txn.put_tb(ns_name, db_name, &dt).await?;
+
+		// Apply any change to the fork's id-generation policy. It lives in its
+		// own `!ig` key rather than on the table definition, so it is written
+		// here instead of being assigned onto `dt` above. `clear_cache` below
+		// covers the invalidation for both.
+		if let Some(policy) = self.id_generation {
+			let key = crate::key::table::ig::new(ns, db, &name);
+			match policy {
+				IdGeneration::Default => txn.del(&key).await?,
+				policy => txn.set(&key, &policy).await?,
+			}
+		}
 
 		// Clear the cache
 		txn.clear_cache();

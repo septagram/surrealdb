@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use reblessive::tree::Stk;
 use surrealdb_strand::Strand;
+use surrealdb_types::ToSql;
 use uuid::Uuid;
 
 use super::DefineKind;
@@ -177,6 +178,31 @@ impl DefineTableStatement {
 		// The `Default` arm deletes rather than writes, so `DEFINE TABLE
 		// OVERWRITE` without an `ID` clause resets a table back to upstream
 		// behaviour and leaves no fork key behind.
+		// Reject a policy that contradicts an existing `id` field kind. Sid and
+		// Rid mint integer keys, so an `id` declared `uuid` (say) would fail
+		// every insert with a coercion error. The contradiction is fully visible
+		// here, so surface it now rather than per write.
+		//
+		// An `id` field carrying a `DEFAULT` is exempt: that `DEFAULT` is
+		// evaluated before the policy is consulted, so the policy never mints a
+		// key for it and the kinds never meet.
+		if self.id_generation != IdGeneration::Default
+			&& let Some(id_field) = txn
+				.all_tb_fields(ns.namespace_id, db.database_id, &name, None)
+				.await?
+				.iter()
+				.find(|fd| fd.name.is_id())
+			&& matches!(id_field.default, crate::catalog::DefineDefault::None)
+			&& let Some(kind) = id_field.field_kind.as_ref()
+			&& !self.id_generation.accepts_id_kind(kind)
+		{
+			bail!(Error::IdGenerationKindConflict {
+				table: name.to_string(),
+				policy: self.id_generation.as_clause().to_string(),
+				kind: kind.to_sql(),
+			});
+		}
+
 		let id_generation_key = crate::key::table::ig::new(ns.namespace_id, db.database_id, &name);
 		match self.id_generation {
 			IdGeneration::Default => txn.del(&id_generation_key).await?,
